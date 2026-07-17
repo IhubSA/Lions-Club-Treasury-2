@@ -296,6 +296,28 @@ function withTimeout(promise, ms){
   ]);
 }
 
+async function uploadAttachment(file){
+  if(!useSupabase || !sb){ showToast("Attachments need this app connected to Supabase"); return null; }
+  if(file.size > 10*1024*1024){ showToast("File is too large — please keep attachments under 10MB"); return null; }
+  try{
+    const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g,'_');
+    const path = `${Date.now()}_${safeName}`;
+    const { error } = await withTimeout(sb.storage.from('receipts').upload(path, file), 20000);
+    if(error) throw error;
+    const { data } = sb.storage.from('receipts').getPublicUrl(path);
+    return { url: data.publicUrl, path, name: file.name };
+  }catch(e){
+    console.error("Attachment upload failed:", e);
+    showToast("Couldn't upload attachment — transaction saved without it");
+    return null;
+  }
+}
+async function deleteAttachment(path){
+  if(!useSupabase || !sb || !path) return;
+  try{ await sb.storage.from('receipts').remove([path]); }
+  catch(e){ console.error("Attachment delete failed:", e); }
+}
+
 async function loadState(){
   try{
     if(useSupabase && sb){
@@ -588,22 +610,35 @@ function renderLedger(){
     <div class="field"><label>Amount (R)</label><input type="number" id="f-amount" step="0.01" placeholder="0.00"></div>
   </div>`);
   formCard.appendChild(form);
+  const attachRow = el(`<div class="field" style="max-width:360px; margin-top:14px;"><label>Attach a slip / invoice (optional)</label><input type="file" id="f-attachment" accept="image/*,.pdf">${useSupabase?'':'<div class="muted" style="font-size:11.5px; margin-top:5px;">Connect Supabase to enable attachments.</div>'}</div>`);
+  formCard.appendChild(attachRow);
   const submitRow = el(`<div style="margin-top:14px; display:flex; gap:10px;"><button class="btn" id="f-submit">Add to ledger</button><span class="muted" id="f-hint" style="align-self:center; font-size:12.5px;"></span></div>`);
   formCard.appendChild(submitRow);
   wrap.appendChild(formCard);
 
   form.querySelectorAll('#f-kind button').forEach(b=> b.onclick = ()=>{ state.ui.formKind = b.dataset.kind; render(); });
   form.querySelectorAll('#f-account button').forEach(b=> b.onclick = ()=>{ state.ui.formAccount = b.dataset.acc; render(); });
-  submitRow.querySelector('#f-submit').onclick = ()=>{
+  const submitBtn = submitRow.querySelector('#f-submit');
+  const hint = submitRow.querySelector('#f-hint');
+  submitBtn.onclick = async ()=>{
     const date = form.querySelector('#f-date').value;
     const type = form.querySelector('#f-type').value;
     const ref = form.querySelector('#f-ref').value.trim();
     const amount = parseFloat(form.querySelector('#f-amount').value)||0;
-    if(!date){ submitRow.querySelector('#f-hint').textContent="Please pick a date."; return; }
-    if(amount<=0){ submitRow.querySelector('#f-hint').textContent="Enter an amount greater than zero."; return; }
+    if(!date){ hint.textContent="Please pick a date."; return; }
+    if(amount<=0){ hint.textContent="Enter an amount greater than zero."; return; }
     const income = state.ui.formKind==='Income' ? amount : 0;
     const expense = state.ui.formKind==='Expense' ? amount : 0;
-    state.transactions.push({ id: uid(), date, account: state.ui.formAccount, type, reference: ref, income, expense });
+
+    let attachment = null;
+    const file = attachRow.querySelector('#f-attachment')?.files[0];
+    if(file){
+      submitBtn.disabled = true;
+      hint.textContent = "Uploading attachment…";
+      attachment = await uploadAttachment(file);
+    }
+
+    state.transactions.push({ id: uid(), date, account: state.ui.formAccount, type, reference: ref, income, expense, attachment });
     saveState();
     showToast(`${state.ui.formKind} of ${fmtMoney(amount)} added to ${state.ui.formAccount}`);
     render();
@@ -645,7 +680,7 @@ function renderLedgerTable(holder, period){
     holder.appendChild(el(`<div class="empty"><div class="big">No matching transactions</div>Try adjusting your filters, or add a new entry above.</div>`));
     return;
   }
-  const tbl = el(`<table><thead><tr><th>Date</th><th>Account</th><th>Category</th><th>Reference</th><th class="right">Income</th><th class="right">Expense</th><th></th></tr></thead><tbody></tbody></table>`);
+  const tbl = el(`<table><thead><tr><th>Date</th><th>Account</th><th>Category</th><th>Reference</th><th class="right">Income</th><th class="right">Expense</th><th style="width:36px;"></th><th></th></tr></thead><tbody></tbody></table>`);
   const tb = tbl.querySelector('tbody');
   rows.forEach(t=>{
     const tr = el(`<tr>
@@ -655,9 +690,14 @@ function renderLedgerTable(holder, period){
       <td class="muted">${t.reference||"—"}</td>
       <td class="right num pos">${t.income? fmtMoney(t.income):""}</td>
       <td class="right num neg">${t.expense? fmtMoney(t.expense):""}</td>
+      <td class="right">${t.attachment?.url?`<a href="${t.attachment.url}" target="_blank" rel="noopener" title="View ${t.attachment.name||'attachment'}">📎</a>`:""}</td>
       <td class="right"><button class="btn ghost small">Delete</button></td>
     </tr>`);
-    tr.querySelector('button').onclick = ()=>{ state.transactions = state.transactions.filter(x=>x.id!==t.id); saveState(); renderLedgerTable(holder, period); showToast("Transaction removed"); };
+    tr.querySelector('button').onclick = ()=>{
+      if(t.attachment?.path) deleteAttachment(t.attachment.path);
+      state.transactions = state.transactions.filter(x=>x.id!==t.id);
+      saveState(); renderLedgerTable(holder, period); showToast("Transaction removed");
+    };
     tb.appendChild(tr);
   });
   holder.appendChild(tbl);
