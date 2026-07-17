@@ -86,6 +86,11 @@
   .tag.projects{ background:#EADFF0; color:#4B2E73; }
   .tag.closed{ background:#EFE9D8; color:var(--ink-soft); }
 
+  .chip-wrap{ display:flex; flex-wrap:wrap; gap:8px; }
+  .chip{ display:inline-flex; align-items:center; gap:8px; background:#F1EAD6; border:1px solid var(--card-border); border-radius:20px; padding:6px 8px 6px 14px; font-size:12.5px; color:var(--ink); }
+  .chip button{ all:unset; cursor:pointer; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:13px; line-height:1; }
+  .chip button:hover{ background:rgba(156,61,61,0.15); color:var(--expense); }
+
   .form-grid{ display:grid; grid-template-columns:repeat(6,1fr); gap:12px; align-items:end; }
   .field label{ display:block; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin-bottom:5px;}
   input,select{ width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; background:#FFFFFF; font-family:'Inter',sans-serif; font-size:13.5px; color:var(--ink);}
@@ -166,7 +171,7 @@
    Fish Hoek Lions Club — Treasury Book
 ---------------------------------------------------------- */
 
-const CATEGORIES = [
+const DEFAULT_CATEGORIES = [
   "Int. Dues","Member Dues","Fund Raiser","Donation","Awards","Memerabilia",
   "Service Project","Account Correction","Meeting","Christmas Cakes","LCIF",
   "Travel","Tail Twister","Bank Charges & Service Fees","MD Dues","Disaster Relief",
@@ -222,6 +227,7 @@ let state = {
   fiscalYear: defaultFY(),
   openingBalances: { Admin: 8850.92, Projects: 88744.04 },
   transactions: [],
+  categories: [...DEFAULT_CATEGORIES],
   dues: MEMBER_NAMES.map(([name,type],i)=>({ id:"d"+i, name, type, owing:0, history:[] })),
   closedYears: [],
   tab: "dashboard",
@@ -319,6 +325,7 @@ async function saveState(){
     fiscalYear: state.fiscalYear,
     openingBalances: state.openingBalances,
     transactions: state.transactions,
+    categories: state.categories,
     dues: state.dues,
     closedYears: state.closedYears
   };
@@ -362,8 +369,14 @@ function accountTotalsFor(period, account){
   return { income, expense, opening, balance: opening + income - expense };
 }
 
+function allCategoriesFor(period){
+  const extra = new Set();
+  period.transactions.forEach(t=>{ if(t.type && !state.categories.includes(t.type)) extra.add(t.type); });
+  return [...state.categories, ...[...extra].sort()];
+}
+
 function monthlyStatement(period, account, mKey){
-  const rows = CATEGORIES.map(cat=>{
+  const rows = allCategoriesFor(period).map(cat=>{
     let income=0, expense=0;
     period.transactions.forEach(t=>{
       if(t.account===account && monthKey(t.date)===mKey && t.type===cat){ income += Number(t.income)||0; expense += Number(t.expense)||0; }
@@ -570,7 +583,7 @@ function renderLedger(){
       <button data-acc="Admin" class="${state.ui.formAccount==='Admin'?'on admin':''}">Admin</button>
       <button data-acc="Projects" class="${state.ui.formAccount==='Projects'?'on projects':''}">Projects</button>
     </div></div>
-    <div class="field"><label>Category</label><select id="f-type">${CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>
+    <div class="field"><label>Category</label><select id="f-type">${state.categories.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>
     <div class="field"><label>Reference</label><input type="text" id="f-ref" placeholder="e.g. member name"></div>
     <div class="field"><label>Amount (R)</label><input type="number" id="f-amount" step="0.01" placeholder="0.00"></div>
   </div>`);
@@ -685,7 +698,7 @@ function renderReports(){
     monthSel.onchange = ()=>{ state.ui.reportMonth = monthSel.value; render(); };
     controls.appendChild(monthSel);
   } else {
-    const catSel = el(`<select><option value="All">All categories</option>${CATEGORIES.map(c=>`<option ${c===state.ui.reportCategory?'selected':''}>${c}</option>`).join('')}</select>`);
+    const catSel = el(`<select><option value="All">All categories</option>${allCategoriesFor(period).map(c=>`<option ${c===state.ui.reportCategory?'selected':''}>${c}</option>`).join('')}</select>`);
     catSel.onchange = ()=>{ state.ui.reportCategory = catSel.value; render(); };
     controls.appendChild(catSel);
   }
@@ -1109,6 +1122,37 @@ function renderSettings(){
     reader.readAsDataURL(file);
   };
   wrap.appendChild(brandCard);
+
+  const catCard = el(`<div class="card" style="max-width:560px; margin-bottom:20px;"></div>`);
+  catCard.appendChild(el(`<div class="section-title">Categories<div class="rule"></div></div>`));
+  catCard.appendChild(el(`<p class="section-sub">Used for every transaction in the Ledger and for category reports. Removing one won't change past transactions already recorded under it.</p>`));
+  const chipWrap = el(`<div class="chip-wrap" style="margin-bottom:16px;"></div>`);
+  state.categories.forEach(cat=>{
+    const chip = el(`<span class="chip">${cat}<button title="Remove category">✕</button></span>`);
+    chip.querySelector('button').onclick = ()=>{
+      state.categories = state.categories.filter(c=>c!==cat);
+      saveState(); showToast(`Removed "${cat}"`); render();
+    };
+    chipWrap.appendChild(chip);
+  });
+  if(state.categories.length===0){ chipWrap.appendChild(el(`<span class="muted" style="font-size:12.5px;">No categories yet — add one below.</span>`)); }
+  catCard.appendChild(chipWrap);
+  const catForm = el(`<div style="display:flex; gap:10px;">
+    <input type="text" id="s-newcat" placeholder="New category name" style="flex:1;">
+    <button class="btn">Add category</button>
+  </div>`);
+  const addCategory = ()=>{
+    const input = catForm.querySelector('#s-newcat');
+    const name = input.value.trim();
+    if(!name){ showToast("Enter a category name"); return; }
+    if(state.categories.some(c=>c.toLowerCase()===name.toLowerCase())){ showToast("That category already exists"); return; }
+    state.categories.push(name);
+    saveState(); showToast(`Added "${name}"`); render();
+  };
+  catForm.querySelector('button').onclick = addCategory;
+  catForm.querySelector('#s-newcat').addEventListener('keydown', e=>{ if(e.key==='Enter') addCategory(); });
+  catCard.appendChild(catForm);
+  wrap.appendChild(catCard);
 
   const fyCard = el(`<div class="card" style="max-width:560px; margin-bottom:20px;"></div>`);
   fyCard.appendChild(el(`<div class="section-title">Current financial year<div class="rule"></div></div>`));
