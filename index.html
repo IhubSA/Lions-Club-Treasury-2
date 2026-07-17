@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root{
     --ink:#132A46; --ink-soft:#3D5470;
@@ -159,8 +160,7 @@
 <body>
 <div class="app" id="app"><div class="loading-wrap">Opening the ledger…</div></div>
 <div class="toast" id="toast"></div>
-const SUPABASE_URL = sb_publishable_7QHxFMUfu40E8pmZM9SHnw__qeTwevj;
-  const SUPABASE_ANON_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBoa3F2anhyY2lra3Zib2ZpbGdyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxMDE3MjEsImV4cCI6MjA5OTY3NzcyMX0.vKxw1XkcTcxynkZYiYfJ93C7c4RkmvX2uwflwrACU28;
+
 <script>
 /* ---------------------------------------------------------
    Fish Hoek Lions Club — Treasury Book
@@ -194,6 +194,17 @@ const MEMBER_NAMES = [
 ];
 
 const STORAGE_KEY = "lions-treasury-state-v2";
+
+/* ---------- Supabase (optional) ----------
+   Fill these in with your project's URL and anon public key
+   (Supabase dashboard → Settings → API) to save data to Supabase
+   instead of Claude's built-in artifact storage. Leave them as-is
+   to keep using this app inside Claude.ai.
+------------------------------------------- */
+const SUPABASE_URL = "https://phkqvjxrcikkvbofilgr.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_7QHxFMUfu40E8pmZM9SHnw__qeTwevj";
+const useSupabase = SUPABASE_URL.startsWith("http") && window.supabase;
+const sb = useSupabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 function defaultFY(){
   // default to 1 July this-or-last year -> 30 June next year
@@ -270,23 +281,37 @@ function showToast(msg){
 
 async function loadState(){
   try{
-    const res = await window.storage.get(STORAGE_KEY, false);
-    if(res && res.value){
-      const parsed = JSON.parse(res.value);
-      state = Object.assign(state, parsed, { tab: state.tab, ui: {} });
+    if(useSupabase){
+      const { data, error } = await sb.from('kv_store').select('value').eq('key', STORAGE_KEY).maybeSingle();
+      if(error) throw error;
+      if(data && data.value){
+        state = Object.assign(state, data.value, { tab: state.tab, ui: {} });
+      }
+    } else {
+      const res = await window.storage.get(STORAGE_KEY, false);
+      if(res && res.value){
+        const parsed = JSON.parse(res.value);
+        state = Object.assign(state, parsed, { tab: state.tab, ui: {} });
+      }
     }
-  }catch(e){ /* first run */ }
+  }catch(e){ /* first run, or nothing saved yet */ }
 }
 async function saveState(){
+  const payload = {
+    club: state.club,
+    fiscalYear: state.fiscalYear,
+    openingBalances: state.openingBalances,
+    transactions: state.transactions,
+    dues: state.dues,
+    closedYears: state.closedYears
+  };
   try{
-    await window.storage.set(STORAGE_KEY, JSON.stringify({
-      club: state.club,
-      fiscalYear: state.fiscalYear,
-      openingBalances: state.openingBalances,
-      transactions: state.transactions,
-      dues: state.dues,
-      closedYears: state.closedYears
-    }), false);
+    if(useSupabase){
+      const { error } = await sb.from('kv_store').upsert({ key: STORAGE_KEY, value: payload, updated_at: new Date().toISOString() });
+      if(error) throw error;
+    } else {
+      await window.storage.set(STORAGE_KEY, JSON.stringify(payload), false);
+    }
   }catch(e){ showToast("Couldn't save — your changes may not persist"); }
 }
 
@@ -1120,8 +1145,7 @@ function renderSettings(){
   wrap.appendChild(dangerCard);
 
   return wrap;
-} const SUPABASE_URL = https://phkqvjxrcikkvbofilgr.supabase.co;
-  const SUPABASE_ANON_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBoa3F2anhyY2lra3Zib2ZpbGdyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxMDE3MjEsImV4cCI6MjA5OTY3NzcyMX0.vKxw1XkcTcxynkZYiYfJ93C7c4RkmvX2uwflwrACU28;
+}
 
 /* ---------- boot ---------- */
 (async function boot(){ await loadState(); render(); })();
