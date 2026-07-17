@@ -886,10 +886,10 @@ function downloadMemberStatement(member){
 function ensureChargeDraft(){
   if(!state.ui.chargeDraft){
     state.ui.chargeDraft = {};
-    state.dues.forEach(m=>{ state.ui.chargeDraft[m.id] = { amount: MEMBERSHIP_RATES[m.type] ?? 0, include:true }; });
+    state.dues.forEach(m=>{ state.ui.chargeDraft[m.id] = { amount: MEMBERSHIP_RATES[m.type] ?? 0, include:false }; });
   } else {
     // keep draft in sync if members were added/removed since it was created
-    state.dues.forEach(m=>{ if(!(m.id in state.ui.chargeDraft)) state.ui.chargeDraft[m.id] = { amount: MEMBERSHIP_RATES[m.type] ?? 0, include:true }; });
+    state.dues.forEach(m=>{ if(!(m.id in state.ui.chargeDraft)) state.ui.chargeDraft[m.id] = { amount: MEMBERSHIP_RATES[m.type] ?? 0, include:false }; });
   }
 }
 
@@ -900,32 +900,16 @@ function renderDues(){
   // Bulk charge card — one row per member, each with its own editable amount
   const chargeCard = el(`<div class="card" style="margin-bottom:20px;"></div>`);
   chargeCard.appendChild(el(`<div class="section-title">Charge annual dues<div class="rule"></div></div>`));
-  chargeCard.appendChild(el(`<p class="section-sub">Set an amount for each member — amounts are pre-filled from their membership type, but you can change any of them individually before applying. Untick a member to skip them this round.</p>`));
+  chargeCard.appendChild(el(`<p class="section-sub">Set an amount for each member — amounts are pre-filled from their membership type, but you can change any of them individually before applying. Tick a member to include them this round.</p>`));
 
-  const resetRow = el(`<div style="margin-bottom:10px;"><button class="btn ghost small">Reset all to membership-type rates</button></div>`);
+  const resetRow = el(`<div style="margin-bottom:14px;"><button class="btn ghost small">Reset all to membership-type rates</button></div>`);
   resetRow.querySelector('button').onclick = ()=>{
     state.dues.forEach(m=>{ state.ui.chargeDraft[m.id].amount = MEMBERSHIP_RATES[m.type] ?? 0; });
     render();
   };
   chargeCard.appendChild(resetRow);
 
-  const chargeTbl = el(`<table><thead><tr><th style="width:36px;"></th><th>Member</th><th>Type</th><th class="right">Amount to charge (R)</th></tr></thead><tbody></tbody></table>`);
-  const chargeTb = chargeTbl.querySelector('tbody');
-  [...state.dues].sort((a,b)=>a.name.localeCompare(b.name)).forEach(m=>{
-    const draft = state.ui.chargeDraft[m.id];
-    const tr = el(`<tr>
-      <td><input type="checkbox" ${draft.include?'checked':''} style="width:auto;"></td>
-      <td>${m.name}</td>
-      <td class="muted">${m.type}</td>
-      <td class="right"><input type="number" step="0.01" value="${draft.amount}" style="width:120px; text-align:right; margin-left:auto;" class="num"></td>
-    </tr>`);
-    tr.querySelector('input[type=checkbox]').onchange = e=>{ draft.include = e.target.checked; };
-    tr.querySelector('input[type=number]').onchange = e=>{ draft.amount = parseFloat(e.target.value)||0; };
-    chargeTb.appendChild(tr);
-  });
-  chargeCard.appendChild(chargeTbl);
-
-  const chargeBtnRow = el(`<div style="margin-top:14px;"><button class="btn">Apply charges</button></div>`);
+  const chargeBtnRow = el(`<div style="margin-bottom:18px;"><button class="btn">Apply charges</button></div>`);
   chargeCard.appendChild(chargeBtnRow);
   chargeBtnRow.querySelector('button').onclick = ()=>{
     const included = state.dues.filter(m=> state.ui.chargeDraft[m.id].include && state.ui.chargeDraft[m.id].amount>0);
@@ -948,7 +932,22 @@ function renderDues(){
     cancelBtn.onclick = ()=> confirmBox.remove();
     chargeBtnRow.appendChild(confirmBox);
   };
-  wrap.appendChild(chargeCard);
+
+  const chargeTbl = el(`<table><thead><tr><th style="width:36px;"></th><th>Member</th><th>Type</th><th class="right">Amount to charge (R)</th></tr></thead><tbody></tbody></table>`);
+  const chargeTb = chargeTbl.querySelector('tbody');
+  [...state.dues].sort((a,b)=>a.name.localeCompare(b.name)).forEach(m=>{
+    const draft = state.ui.chargeDraft[m.id];
+    const tr = el(`<tr>
+      <td><input type="checkbox" ${draft.include?'checked':''} style="width:auto;"></td>
+      <td>${m.name}</td>
+      <td class="muted">${m.type}</td>
+      <td class="right"><input type="number" step="0.01" value="${draft.amount}" style="width:120px; text-align:right; margin-left:auto;" class="num"></td>
+    </tr>`);
+    tr.querySelector('input[type=checkbox]').onchange = e=>{ draft.include = e.target.checked; };
+    tr.querySelector('input[type=number]').onchange = e=>{ draft.amount = parseFloat(e.target.value)||0; };
+    chargeTb.appendChild(tr);
+  });
+  chargeCard.appendChild(chargeTbl);
 
   // Add member
   const addCard = el(`<div class="card" style="margin-bottom:20px;"></div>`);
@@ -1053,6 +1052,8 @@ function renderDues(){
   });
   tableCard.appendChild(tbl);
   wrap.appendChild(tableCard);
+
+  wrap.appendChild(chargeCard);
   return wrap;
 }
 
