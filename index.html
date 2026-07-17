@@ -201,10 +201,14 @@ const STORAGE_KEY = "lions-treasury-state-v2";
    instead of Claude's built-in artifact storage. Leave them as-is
    to keep using this app inside Claude.ai.
 ------------------------------------------- */
-const SUPABASE_URL = "https://phkqvjxrcikkvbofilgr.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_7QHxFMUfu40E8pmZM9SHnw__qeTwevj";
-const useSupabase = SUPABASE_URL.startsWith("http") && window.supabase;
-const sb = useSupabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+const SUPABASE_URL = "https://phkqvjxrcikkvbofilgr.supabase.co".trim();
+const SUPABASE_ANON_KEY = "sb_publishable_7QHxFMUfu40E8pmZM9SHnw__qeTwevj".trim();
+const useSupabase = SUPABASE_URL.startsWith("http") && !!window.supabase;
+let sb = null;
+if(useSupabase){
+  try{ sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }
+  catch(e){ console.error("Supabase client failed to initialise:", e); sb = null; }
+}
 
 function defaultFY(){
   // default to 1 July this-or-last year -> 30 June next year
@@ -279,22 +283,35 @@ function showToast(msg){
   showToast._t = setTimeout(()=> t.classList.remove('show'), 2200);
 }
 
+function withTimeout(promise, ms){
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(()=> reject(new Error("Request timed out")), ms))
+  ]);
+}
+
 async function loadState(){
   try{
-    if(useSupabase){
-      const { data, error } = await sb.from('kv_store').select('value').eq('key', STORAGE_KEY).maybeSingle();
+    if(useSupabase && sb){
+      const { data, error } = await withTimeout(
+        sb.from('kv_store').select('value').eq('key', STORAGE_KEY).maybeSingle(),
+        10000
+      );
       if(error) throw error;
       if(data && data.value){
         state = Object.assign(state, data.value, { tab: state.tab, ui: {} });
       }
-    } else {
+    } else if(!useSupabase && window.storage){
       const res = await window.storage.get(STORAGE_KEY, false);
       if(res && res.value){
         const parsed = JSON.parse(res.value);
         state = Object.assign(state, parsed, { tab: state.tab, ui: {} });
       }
     }
-  }catch(e){ /* first run, or nothing saved yet */ }
+  }catch(e){
+    console.error("Couldn't load saved data — starting with a blank slate:", e);
+    showToast("Couldn't load saved data — check your connection and refresh");
+  }
 }
 async function saveState(){
   const payload = {
@@ -306,13 +323,16 @@ async function saveState(){
     closedYears: state.closedYears
   };
   try{
-    if(useSupabase){
-      const { error } = await sb.from('kv_store').upsert({ key: STORAGE_KEY, value: payload, updated_at: new Date().toISOString() });
+    if(useSupabase && sb){
+      const { error } = await withTimeout(
+        sb.from('kv_store').upsert({ key: STORAGE_KEY, value: payload, updated_at: new Date().toISOString() }),
+        10000
+      );
       if(error) throw error;
-    } else {
+    } else if(window.storage){
       await window.storage.set(STORAGE_KEY, JSON.stringify(payload), false);
     }
-  }catch(e){ showToast("Couldn't save — your changes may not persist"); }
+  }catch(e){ console.error("Save failed:", e); showToast("Couldn't save — your changes may not persist"); }
 }
 
 /* ---------- dataset helpers (current FY or a closed year) ---------- */
@@ -1148,7 +1168,11 @@ function renderSettings(){
 }
 
 /* ---------- boot ---------- */
-(async function boot(){ await loadState(); render(); })();
+(async function boot(){
+  try{ await loadState(); }
+  catch(e){ console.error("Unexpected error during startup:", e); }
+  render();
+})();
 </script>
 </body>
 </html>
