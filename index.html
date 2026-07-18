@@ -150,6 +150,22 @@
 
   .closed-badge{ display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--ink-soft); }
 
+  .print-only{ display:none; }
+  .print-header{ font-size:11.5px; color:#333; border-bottom:1px solid #999; padding-bottom:8px; margin-bottom:16px; }
+
+  @media print {
+    body{ background:#fff !important; }
+    .sidebar, .toast, .confirm-box, .no-print{ display:none !important; }
+    button, input, select{ display:none !important; }
+    .print-only{ display:block !important; }
+    .app{ display:block; max-width:100%; }
+    main{ padding:0; }
+    .card{ box-shadow:none; border:1px solid #ccc; break-inside:avoid; margin-bottom:14px; background:#fff; }
+    .page-head{ margin-bottom:10px; }
+    .fy-pill{ box-shadow:none; }
+    table{ font-size:11.5px; }
+  }
+
   @media (max-width: 880px){
     .app{ flex-direction:column; }
     .sidebar{ position:relative; height:auto; width:100%; flex-direction:row; align-items:center; padding:16px; }
@@ -222,6 +238,7 @@ function defaultFY(){
   return { startDate: `${y}-07-01`, endDate: `${y+1}-06-30` };
 }
 
+let authSession = null;
 let state = {
   club: { name: "Fish Hoek Lions Club", logo: null },
   fiscalYear: defaultFY(),
@@ -473,6 +490,7 @@ function closeCurrentYear(){
 function el(html){ const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
 
 function render(){
+  if(useSupabase && !authSession){ renderLoginScreen(); return; }
   document.title = state.club.name + " — Treasury Book";
   const app = document.getElementById('app');
   app.innerHTML = "";
@@ -481,6 +499,54 @@ function render(){
   main.appendChild(renderPageHead());
   main.appendChild(renderTabContent());
   app.appendChild(main);
+}
+
+function renderLoginScreen(){
+  document.title = state.club.name + " — Sign in";
+  const app = document.getElementById('app');
+  app.innerHTML = "";
+  const wrap = el(`<div style="min-height:100vh; width:100%; display:flex; align-items:center; justify-content:center;">
+    <div class="card" style="width:340px;">
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:22px;">
+        <div class="crest" style="width:52px;height:52px;">${state.club.logo?`<img src="${state.club.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`:clubInitials(state.club.name)}</div>
+        <h1 style="font-size:19px; margin:0; text-align:center;">${state.club.name}</h1>
+        <p class="muted" style="font-size:12.5px; margin:0;">Treasury Book — sign in to continue</p>
+      </div>
+      <div class="field" style="margin-bottom:12px;"><label>Email</label><input type="email" id="login-email" autocomplete="username"></div>
+      <div class="field" style="margin-bottom:8px;"><label>Password</label><input type="password" id="login-password" autocomplete="current-password"></div>
+      <div id="login-error" style="color:var(--expense); font-size:12.5px; min-height:16px; margin-bottom:8px;"></div>
+      <button class="btn" id="login-btn" style="width:100%;">Sign in</button>
+      <p class="muted" style="font-size:11.5px; text-align:center; margin-top:16px;">Access is by invitation only. Contact your treasurer if you need an account.</p>
+    </div>
+  </div>`);
+  app.appendChild(wrap);
+
+  const emailInput = wrap.querySelector('#login-email');
+  const passwordInput = wrap.querySelector('#login-password');
+  const errBox = wrap.querySelector('#login-error');
+  const btn = wrap.querySelector('#login-btn');
+
+  const doLogin = async ()=>{
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
+    errBox.textContent = "";
+    if(!email || !password){ errBox.textContent = "Enter your email and password."; return; }
+    btn.disabled = true; btn.textContent = "Signing in…";
+    try{
+      const { data, error } = await withTimeout(sb.auth.signInWithPassword({ email, password }), 10000);
+      if(error) throw error;
+      authSession = data.session;
+      await loadState();
+      render();
+    }catch(e){
+      console.error("Sign-in failed:", e);
+      errBox.textContent = "Couldn't sign in — check your email and password.";
+      btn.disabled = false; btn.textContent = "Sign in";
+    }
+  };
+  btn.onclick = doLogin;
+  [emailInput, passwordInput].forEach(inp=> inp.addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); }));
+  emailInput.focus();
 }
 
 function renderSidebar(){
@@ -498,7 +564,13 @@ function renderSidebar(){
       <div><div class="brand-name">${state.club.name}</div><div class="brand-sub">${shortFYLabel(state.fiscalYear)}</div></div>
     </div>
     <nav></nav>
-    <div class="sidebar-footer">Treasury Book<br/>Digitised from the club's<br/>official finance workbook.</div>
+    <div class="sidebar-footer">
+      Treasury Book<br/>Digitised from the club's<br/>official finance workbook.
+      ${useSupabase && authSession ? `<div style="margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.12);">
+        <div style="color:#D9D0B8; font-size:11px; margin-bottom:6px; word-break:break-all;">${authSession.user?.email||''}</div>
+        <button id="sidebar-signout" style="all:unset; cursor:pointer; color:var(--gold-soft); font-size:11px; text-decoration:underline;">Sign out</button>
+      </div>` : ''}
+    </div>
   </div>`);
   const nav = wrap.querySelector('nav');
   tabs.forEach(([id,ico,label])=>{
@@ -506,6 +578,15 @@ function renderSidebar(){
     b.onclick = ()=>{ state.tab = id; state.ui={}; render(); };
     nav.appendChild(b);
   });
+  const signOutBtn = wrap.querySelector('#sidebar-signout');
+  if(signOutBtn){
+    signOutBtn.onclick = async ()=>{
+      try{ await sb.auth.signOut(); }catch(e){ console.error("Sign out failed:", e); }
+      authSession = null;
+      state.tab = "dashboard"; state.ui = {};
+      render();
+    };
+  }
   return wrap;
 }
 
@@ -519,8 +600,20 @@ function renderPageHead(){
     settings:["Settings","Fiscal year dates and data management."]
   };
   const [t,sub] = titles[state.tab];
-  return el(`<div class="page-head"><div><h1>${t}</h1><p>${sub}</p></div>
-    <div class="fy-pill">FY ${fyDateRangeLabel(state.fiscalYear)}</div></div>`);
+  const wrap = el(`<div>
+    <div class="print-only print-header">
+      <strong>${state.club.name}</strong> — ${t} — FY ${fyDateRangeLabel(state.fiscalYear)}
+      <span style="float:right;">Printed ${fmtDate(new Date().toISOString().slice(0,10))}</span>
+    </div>
+    <div class="page-head"><div><h1>${t}</h1><p>${sub}</p></div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div class="fy-pill">FY ${fyDateRangeLabel(state.fiscalYear)}</div>
+        <button class="btn ghost no-print" id="print-btn">🖨 Print</button>
+      </div>
+    </div>
+  </div>`);
+  wrap.querySelector('#print-btn').onclick = ()=> window.print();
+  return wrap;
 }
 
 function renderTabContent(){
@@ -592,7 +685,7 @@ function renderLedger(){
   const period = getPeriod("current");
 
   const wrap = el(`<div></div>`);
-  const formCard = el(`<div class="card" style="margin-bottom:20px;"></div>`);
+  const formCard = el(`<div class="card no-print" style="margin-bottom:20px;"></div>`);
   formCard.appendChild(el(`<div class="section-title">New transaction<div class="rule"></div></div>`));
   formCard.appendChild(el(`<p class="section-sub">Record income or an expense, then allocate it to the Admin or Projects account.</p>`));
   const form = el(`<div class="form-grid">
@@ -644,7 +737,7 @@ function renderLedger(){
     render();
   };
 
-  const filterRow = el(`<div class="filters"></div>`);
+  const filterRow = el(`<div class="filters no-print"></div>`);
   const accSel = el(`<select><option>All</option><option>Admin</option><option>Projects</option></select>`);
   accSel.value = ledgerFilter.account;
   accSel.onchange = ()=>{ ledgerFilter.account = accSel.value; renderLedgerTable(tableHolder, period); };
@@ -715,7 +808,7 @@ function renderReports(){
   state.ui.reportMonth = state.ui.reportMonth && months.includes(state.ui.reportMonth) ? state.ui.reportMonth : (allMonthsChronological(period).slice(-1)[0] || months[0]);
 
   const wrap = el(`<div></div>`);
-  const controls = el(`<div class="filters" style="margin-bottom:20px;"></div>`);
+  const controls = el(`<div class="filters no-print" style="margin-bottom:20px;"></div>`);
 
   const periodSel = el(`<select>${periodOptions().map(([id,label])=>`<option value="${id}" ${id===state.ui.reportPeriod?'selected':''}>${label}</option>`).join('')}</select>`);
   periodSel.onchange = ()=>{ state.ui.reportPeriod = periodSel.value; state.ui.reportMonth=null; render(); };
@@ -821,7 +914,7 @@ function renderBalanceSheet(){
     <td class="right num">${fmtMoney(admin.balance+projects.balance)}</td></tr>`));
   card.appendChild(tbl);
 
-  const closeArea = el(`<div style="margin-top:18px;"></div>`);
+  const closeArea = el(`<div class="no-print" style="margin-top:18px;"></div>`);
   const closeBtn = el(`<button class="btn ghost">Close this financial year</button>`);
   closeArea.appendChild(el(`<p class="section-sub" style="margin-top:14px;">Closing the year archives every transaction above, carries the closing balances forward as next year's opening balances, and starts a fresh ledger for the new financial year.</p>`));
   closeArea.appendChild(closeBtn);
@@ -951,7 +1044,7 @@ function renderDues(){
   const wrap = el(`<div></div>`);
 
   // Bulk charge card — one row per member, each with its own editable amount
-  const chargeCard = el(`<div class="card" style="margin-bottom:20px;"></div>`);
+  const chargeCard = el(`<div class="card no-print" style="margin-bottom:20px;"></div>`);
   chargeCard.appendChild(el(`<div class="section-title">Charge annual dues<div class="rule"></div></div>`));
   chargeCard.appendChild(el(`<p class="section-sub">Set an amount for each member — amounts are pre-filled from their membership type, but you can change any of them individually before applying. Tick a member to include them this round.</p>`));
 
@@ -1003,7 +1096,7 @@ function renderDues(){
   chargeCard.appendChild(chargeTbl);
 
   // Add member
-  const addCard = el(`<div class="card" style="margin-bottom:20px;"></div>`);
+  const addCard = el(`<div class="card no-print" style="margin-bottom:20px;"></div>`);
   addCard.appendChild(el(`<div class="section-title">Add member<div class="rule"></div></div>`));
   const addForm = el(`<div class="form-grid" style="grid-template-columns:2fr 1.5fr auto;">
     <div class="field"><label>Name</label><input type="text" id="d-name" placeholder="Full name"></div>
@@ -1254,8 +1347,22 @@ function renderSettings(){
 
 /* ---------- boot ---------- */
 (async function boot(){
-  try{ await loadState(); }
-  catch(e){ console.error("Unexpected error during startup:", e); }
+  if(useSupabase && sb){
+    try{
+      const { data } = await withTimeout(sb.auth.getSession(), 8000);
+      authSession = data?.session || null;
+    }catch(e){ console.error("Couldn't check login status:", e); }
+    sb.auth.onAuthStateChange((_event, session)=>{
+      const wasSignedIn = !!authSession;
+      authSession = session;
+      if(!wasSignedIn && session){ loadState().then(render); }
+      else if(wasSignedIn && !session){ render(); }
+    });
+  }
+  if(!useSupabase || authSession){
+    try{ await loadState(); }
+    catch(e){ console.error("Unexpected error during startup:", e); }
+  }
   render();
 })();
 </script>
