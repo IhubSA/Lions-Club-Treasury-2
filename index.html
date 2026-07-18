@@ -87,6 +87,14 @@
   .tag.closed{ background:#EFE9D8; color:var(--ink-soft); }
 
   .chip-wrap{ display:flex; flex-wrap:wrap; gap:8px; }
+
+  .sig-block{ display:flex; gap:36px; margin-top:32px; padding-top:20px; border-top:1px solid var(--card-border); flex-wrap:wrap; }
+  .sig-col{ flex:1; min-width:150px; }
+  .sig-image{ height:44px; display:flex; align-items:flex-end; }
+  .sig-image img{ max-height:44px; max-width:170px; object-fit:contain; }
+  .sig-line{ border-bottom:1px solid var(--ink); margin-top:4px; margin-bottom:6px; }
+  .sig-name{ font-size:12.5px; font-weight:600; min-height:16px; }
+  .sig-title{ font-size:10.5px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.05em; }
   .chip{ display:inline-flex; align-items:center; gap:8px; background:#F1EAD6; border:1px solid var(--card-border); border-radius:20px; padding:6px 8px 6px 14px; font-size:12.5px; color:var(--ink); }
   .chip button{ all:unset; cursor:pointer; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:13px; line-height:1; }
   .chip button:hover{ background:rgba(156,61,61,0.15); color:var(--expense); }
@@ -250,13 +258,15 @@ function defaultFY(){
 
 let authSession = null;
 let state = {
-  club: { name: "Fish Hoek Lions Club", logo: null },
+  club: { name: "Fish Hoek Lions Club", logo: null, bankDetails: "", treasurerName: "", treasurerEmail: "",
+    address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null },
   fiscalYear: defaultFY(),
   openingBalances: { Admin: 8850.92, Projects: 88744.04 },
   transactions: [],
   categories: [...DEFAULT_CATEGORIES],
   dues: MEMBER_NAMES.map(([name,type],i)=>({ id:"d"+i, name, type, owing:0, history:[] })),
   closedYears: [],
+  donorDocuments: [],
   tab: "dashboard",
   ui: {}
 };
@@ -354,13 +364,19 @@ async function loadState(){
       );
       if(error) throw error;
       if(data && data.value){
-        state = Object.assign(state, data.value, { tab: state.tab, ui: {} });
+        state = Object.assign(state, data.value, {
+          tab: state.tab, ui: {},
+          club: Object.assign({}, state.club, data.value.club)
+        });
       }
     } else if(!useSupabase && window.storage){
       const res = await window.storage.get(STORAGE_KEY, false);
       if(res && res.value){
         const parsed = JSON.parse(res.value);
-        state = Object.assign(state, parsed, { tab: state.tab, ui: {} });
+        state = Object.assign(state, parsed, {
+          tab: state.tab, ui: {},
+          club: Object.assign({}, state.club, parsed.club)
+        });
       }
     }
   }catch(e){
@@ -376,7 +392,8 @@ async function saveState(){
     transactions: state.transactions,
     categories: state.categories,
     dues: state.dues,
-    closedYears: state.closedYears
+    closedYears: state.closedYears,
+    donorDocuments: state.donorDocuments
   };
   try{
     if(useSupabase && sb){
@@ -566,6 +583,7 @@ function renderSidebar(){
     ["reports","▤","Reports"],
     ["balance-sheet","▦","Balance Sheet"],
     ["dues","♦","Member Dues"],
+    ["donations","🧾","Invoices & Receipts"],
     ["settings","⚙","Settings"]
   ];
   const wrap = el(`<div class="sidebar">
@@ -607,6 +625,7 @@ function renderPageHead(){
     reports:["Reports","Monthly statements or category totals, for any financial year."],
     "balance-sheet":["Balance Sheet","Opening and closing position, and closing off the year."],
     dues:["Member Dues","Charge annual dues and track what's still owing."],
+    donations:["Invoices & Receipts","Generate a simple invoice or receipt for a donor."],
     settings:["Settings","Fiscal year dates and data management."]
   };
   const [t,sub] = titles[state.tab];
@@ -632,6 +651,7 @@ function renderTabContent(){
   if(state.tab==="reports") return renderReports();
   if(state.tab==="balance-sheet") return renderBalanceSheet();
   if(state.tab==="dues") return renderDues();
+  if(state.tab==="donations") return renderDonations();
   if(state.tab==="settings") return renderSettings();
 }
 
@@ -807,11 +827,30 @@ function renderLedgerTable(holder, period){
 }
 
 /* ---- Reports ---- */
+function renderSignatureBlock(){
+  const col = (label, name, sigKey)=> `<div class="sig-col">
+    <div class="sig-image">${state.club[sigKey]?`<img src="${state.club[sigKey]}">`:''}</div>
+    <div class="sig-line"></div>
+    <div class="sig-name">${name || ''}</div>
+    <div class="sig-title">${label}</div>
+  </div>`;
+  return el(`<div class="sig-block">
+    ${col('President', state.club.presidentName, 'presidentSignature')}
+    ${col('Treasurer', state.club.treasurerName, 'treasurerSignature')}
+    <div class="sig-col" style="flex:0 0 140px;">
+      <div class="sig-image"></div>
+      <div class="sig-line"></div>
+      <div class="sig-title">Date</div>
+    </div>
+  </div>`);
+}
+
 function renderReports(){
   state.ui.reportPeriod = state.ui.reportPeriod || "current";
   state.ui.reportAccount = state.ui.reportAccount || "Admin";
   state.ui.reportMode = state.ui.reportMode || "monthly";
   state.ui.reportCategory = state.ui.reportCategory || "All";
+  if(state.ui.reportShowSignatures === undefined) state.ui.reportShowSignatures = true;
 
   const period = getPeriod(state.ui.reportPeriod);
   const months = fyMonthKeys(period.fiscalYear);
@@ -840,6 +879,12 @@ function renderReports(){
     const monthSel = el(`<select>${months.map(m=>`<option value="${m}" ${m===state.ui.reportMonth?'selected':''}>${monthDisplay(m)}</option>`).join('')}</select>`);
     monthSel.onchange = ()=>{ state.ui.reportMonth = monthSel.value; render(); };
     controls.appendChild(monthSel);
+
+    const sigToggle = el(`<label style="display:flex; align-items:center; gap:7px; font-size:13px; color:var(--ink-soft); cursor:pointer;">
+      <input type="checkbox" style="width:auto;" ${state.ui.reportShowSignatures?'checked':''}> Include signatures
+    </label>`);
+    sigToggle.querySelector('input').onchange = (e)=>{ state.ui.reportShowSignatures = e.target.checked; render(); };
+    controls.appendChild(sigToggle);
   } else {
     const catSel = el(`<select><option value="All">All categories</option>${allCategoriesFor(period).map(c=>`<option ${c===state.ui.reportCategory?'selected':''}>${c}</option>`).join('')}</select>`);
     catSel.onchange = ()=>{ state.ui.reportCategory = catSel.value; render(); };
@@ -882,10 +927,11 @@ function renderReports(){
     strip.appendChild(el(`<div class="balance-box"><div class="label">Net movement this month</div><div class="val num ${stmt.totalIncome-stmt.totalExpense>=0?'pos':'neg'}">${fmtMoney(stmt.totalIncome-stmt.totalExpense)}</div></div>`));
     strip.appendChild(el(`<div class="balance-box"><div class="label">Balance carried forward</div><div class="val num">${fmtMoney(closingCF)}</div></div>`));
     card.appendChild(strip);
+    if(state.ui.reportShowSignatures){ card.appendChild(renderSignatureBlock()); }
     wrap.appendChild(card);
   } else {
     const rep = categoryReport(period, state.ui.reportAccount, state.ui.reportCategory);
-    const card = el(`<div class="card"></div>`);
+    const card = el(`<div class="card report-card"></div>`);
     card.appendChild(el(`<div class="section-title">${state.ui.reportCategory} — ${state.ui.reportAccount} Account — FY ${shortFYLabel(period.fiscalYear)}<div class="rule"></div></div>`));
     const tbl = el(`<table><thead><tr><th>Month</th><th class="right">Income</th><th class="right">Expense</th><th class="right">Net</th></tr></thead><tbody></tbody></table>`);
     const tb = tbl.querySelector('tbody');
@@ -1044,7 +1090,186 @@ function downloadMemberStatement(member){
   doc.setFont('helvetica','bold'); doc.setFontSize(12);
   doc.text(`Balance owing: ${fmtMoney(member.owing)}`, marginX, y);
 
+  y = addPdfFooterDetails(doc, marginX, y);
+
   doc.save(`${member.name.replace(/\s+/g,'_')}_Dues_Statement.pdf`);
+}
+
+function addPdfFooterDetails(doc, marginX, y){
+  if(state.club.bankDetails && state.club.bankDetails.trim()){
+    y += 14;
+    if(y > 255){ doc.addPage(); y = 20; }
+    doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(20,42,70);
+    doc.text('Payment details', marginX, y);
+    y += 6;
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(60,70,85);
+    state.club.bankDetails.split('\n').forEach(line=>{
+      if(y > 280){ doc.addPage(); y = 20; }
+      doc.text(line, marginX, y);
+      y += 5.5;
+    });
+  }
+  if(state.club.treasurerName || state.club.treasurerEmail){
+    y += 10;
+    if(y > 270){ doc.addPage(); y = 20; }
+    doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(20,42,70);
+    doc.text('Any queries', marginX, y);
+    y += 6;
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(60,70,85);
+    const contact = [state.club.treasurerName, state.club.treasurerEmail].filter(Boolean).join('  —  ');
+    doc.text(`Treasurer: ${contact}`, marginX, y);
+    y += 5.5;
+  }
+  doc.setTextColor(20,20,20);
+  return y;
+}
+
+function downloadDonorDocument(record){
+  if(!window.jspdf || !window.jspdf.jsPDF){ showToast("PDF library still loading — try again in a moment"); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const marginX = 15, rightX = 195;
+  let y = 20;
+  const textStartX = state.club.logo ? marginX + 24 : marginX;
+
+  if(state.club.logo){
+    try{ doc.addImage(state.club.logo, 'PNG', marginX, y-9, 18, 18); }catch(e){ /* ignore bad image */ }
+  }
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(20,42,70);
+  doc.text(state.club.name, textStartX, y);
+  let headerY = y + 6;
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(90,100,115);
+  if(state.club.address && state.club.address.trim()){
+    state.club.address.trim().split('\n').forEach(line=>{
+      doc.text(line, textStartX, headerY);
+      headerY += 4.2;
+    });
+  }
+  const contactBits = [state.club.phone, state.club.email].filter(Boolean).join('   •   ');
+  if(contactBits){ doc.text(contactBits, textStartX, headerY); headerY += 4.2; }
+  doc.setFontSize(9.5);
+  doc.text(record.type==='invoice' ? 'Donation Invoice' : 'Donation Receipt', textStartX, headerY+2);
+  doc.setTextColor(20,20,20);
+
+  y = Math.max(y + 20, headerY + 10);
+  doc.setDrawColor(200,154,62); doc.setLineWidth(0.6); doc.line(marginX, y, rightX, y);
+  y += 10;
+
+  doc.setFontSize(13); doc.setFont('helvetica','bold');
+  doc.text(record.type==='invoice' ? 'Invoice' : 'Receipt', marginX, y);
+  doc.setFontSize(10.5); doc.setFont('helvetica','normal');
+  doc.text(record.number, rightX, y, {align:'right'});
+  y += 9;
+  doc.text(`Date: ${fmtDate(record.date)}`, marginX, y); y += 6;
+  doc.text(`Donor: ${record.donorName}`, marginX, y); y += 6;
+  if(record.donorEmail){ doc.text(`Email: ${record.donorEmail}`, marginX, y); y += 6; }
+  y += 6;
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+  doc.text('Description', marginX, y);
+  doc.text('Amount', rightX, y, {align:'right'});
+  y += 2.5;
+  doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y);
+  y += 6.5;
+  doc.setFont('helvetica','normal');
+  doc.text(record.description || 'Donation', marginX, y);
+  doc.text(fmtMoney(record.amount).replace('R ',''), rightX, y, {align:'right'});
+  y += 4;
+  doc.setDrawColor(19,42,70); doc.setLineWidth(0.5); doc.line(marginX, y, rightX, y);
+  y += 9;
+  doc.setFont('helvetica','bold'); doc.setFontSize(12);
+  doc.text(`Total ${record.type==='invoice'?'due':'received'}: ${fmtMoney(record.amount)}`, marginX, y);
+
+  y += 10;
+  doc.setFont(record.type==='receipt' ? 'helvetica' : 'helvetica', record.type==='receipt' ? 'italic' : 'normal');
+  doc.setFontSize(record.type==='receipt' ? 10.5 : 9.5);
+  doc.setTextColor(record.type==='receipt' ? 20 : 90, record.type==='receipt' ? 42 : 100, record.type==='receipt' ? 70 : 115);
+  doc.text(
+    record.type==='receipt'
+      ? `Thank you for your generous donation to ${state.club.name}.`
+      : 'Please use the invoice number above as your payment reference.',
+    marginX, y
+  );
+  doc.setTextColor(20,20,20);
+
+  y = addPdfFooterDetails(doc, marginX, y);
+
+  doc.save(`${record.number}_${record.donorName.replace(/\s+/g,'_')}.pdf`);
+}
+
+function createDonorDocument(type, data){
+  const countOfType = state.donorDocuments.filter(d=>d.type===type).length;
+  const number = (type==='invoice' ? 'INV-' : 'REC-') + String(countOfType+1).padStart(4,'0');
+  const record = { id: uid(), type, number, ...data, createdAt: new Date().toISOString() };
+  state.donorDocuments.push(record);
+  saveState();
+  downloadDonorDocument(record);
+  showToast(`${type==='invoice'?'Invoice':'Receipt'} ${number} generated`);
+  render();
+}
+
+function renderDonations(){
+  const wrap = el(`<div></div>`);
+
+  const formCard = el(`<div class="card no-print" style="margin-bottom:20px;"></div>`);
+  formCard.appendChild(el(`<div class="section-title">New donor document<div class="rule"></div></div>`));
+  formCard.appendChild(el(`<p class="section-sub">Generate a simple invoice (to request a payment) or a receipt (to confirm one was received) for a donor.</p>`));
+  const form = el(`<div class="form-grid" style="grid-template-columns:repeat(5,1fr);">
+    <div class="field"><label>Donor name</label><input type="text" id="dd-name" placeholder="Full name"></div>
+    <div class="field"><label>Donor email (optional)</label><input type="email" id="dd-email" placeholder="name@example.com"></div>
+    <div class="field"><label>Date</label><input type="date" id="dd-date" value="${new Date().toISOString().slice(0,10)}"></div>
+    <div class="field"><label>Amount (R)</label><input type="number" step="0.01" id="dd-amount" placeholder="0.00"></div>
+    <div class="field"><label>Description</label><input type="text" id="dd-desc" value="Donation" placeholder="e.g. Donation towards…"></div>
+  </div>`);
+  formCard.appendChild(form);
+  const btnRow = el(`<div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+    <button class="btn ghost" id="dd-invoice">Generate invoice (PDF)</button>
+    <button class="btn" id="dd-receipt">Generate receipt (PDF)</button>
+    <span class="muted" id="dd-hint" style="font-size:12.5px;"></span>
+  </div>`);
+  formCard.appendChild(btnRow);
+  wrap.appendChild(formCard);
+
+  const hint = btnRow.querySelector('#dd-hint');
+  const generate = (type)=>{
+    const donorName = form.querySelector('#dd-name').value.trim();
+    const donorEmail = form.querySelector('#dd-email').value.trim();
+    const date = form.querySelector('#dd-date').value;
+    const amount = parseFloat(form.querySelector('#dd-amount').value)||0;
+    const description = form.querySelector('#dd-desc').value.trim() || 'Donation';
+    if(!donorName){ hint.textContent = "Enter the donor's name."; return; }
+    if(!date){ hint.textContent = "Please pick a date."; return; }
+    if(amount<=0){ hint.textContent = "Enter an amount greater than zero."; return; }
+    hint.textContent = "";
+    createDonorDocument(type, { donorName, donorEmail, date, amount, description });
+  };
+  btnRow.querySelector('#dd-invoice').onclick = ()=> generate('invoice');
+  btnRow.querySelector('#dd-receipt').onclick = ()=> generate('receipt');
+
+  const histCard = el(`<div class="card"></div>`);
+  histCard.appendChild(el(`<div class="section-title">History<div class="rule"></div></div>`));
+  const docs = [...state.donorDocuments].sort((a,b)=> (b.createdAt||"").localeCompare(a.createdAt||""));
+  if(docs.length===0){
+    histCard.appendChild(el(`<div class="empty"><div class="big">No documents yet</div>Invoices and receipts you generate will be listed here.</div>`));
+  } else {
+    const tbl = el(`<table><thead><tr><th>Number</th><th>Type</th><th>Donor</th><th class="right">Amount</th><th>Date</th><th></th></tr></thead><tbody></tbody></table>`);
+    const tb = tbl.querySelector('tbody');
+    docs.forEach(d=>{
+      const tr = el(`<tr>
+        <td class="num">${d.number}</td>
+        <td><span class="tag ${d.type==='invoice'?'admin':'projects'}">${d.type==='invoice'?'Invoice':'Receipt'}</span></td>
+        <td>${d.donorName}</td>
+        <td class="right num">${fmtMoney(d.amount)}</td>
+        <td class="muted">${fmtDate(d.date)}</td>
+        <td class="right"><button class="btn ghost small no-print">Download</button></td>
+      </tr>`);
+      tr.querySelector('button').onclick = ()=> downloadDonorDocument(d);
+      tb.appendChild(tr);
+    });
+    histCard.appendChild(tbl);
+  }
+  wrap.appendChild(histCard);
+  return wrap;
 }
 
 function ensureChargeDraft(){
@@ -1221,13 +1446,33 @@ function renderDues(){
   return wrap;
 }
 
+function readImageAsDataUrl(file, maxDim, onDone, onError){
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    const img = new Image();
+    img.onload = ()=>{
+      let w = img.width, h = img.height;
+      if(w>=h){ if(w>maxDim){ h = Math.round(h*maxDim/w); w = maxDim; } }
+      else { if(h>maxDim){ w = Math.round(w*maxDim/h); h = maxDim; } }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      onDone(canvas.toDataURL('image/png'));
+    };
+    img.onerror = ()=> onError && onError();
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
 /* ---- Settings ---- */
 function renderSettings(){
   const wrap = el(`<div></div>`);
 
+  // --- Club branding ---
   const brandCard = el(`<div class="card" style="max-width:560px; margin-bottom:20px;"></div>`);
   brandCard.appendChild(el(`<div class="section-title">Club branding<div class="rule"></div></div>`));
-  brandCard.appendChild(el(`<p class="section-sub">Shown in the sidebar, and on downloaded member statements.</p>`));
+  brandCard.appendChild(el(`<p class="section-sub">Shown in the sidebar, and on downloaded documents.</p>`));
   const nameField = el(`<div class="field" style="margin-bottom:16px;"><label>Club name</label><input type="text" id="s-clubname" value="${state.club.name}"></div>`);
   brandCard.appendChild(nameField);
 
@@ -1236,43 +1481,110 @@ function renderSettings(){
   const logoInputWrap = el(`<div><label style="display:block; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin-bottom:5px;">Club logo</label><input type="file" accept="image/*" id="s-logo-file"></div>`);
   logoRow.appendChild(logoPreview); logoRow.appendChild(logoInputWrap);
   brandCard.appendChild(logoRow);
-
   if(state.club.logo){
     const removeLogoBtn = el(`<button class="btn ghost small" style="margin-top:10px;">Remove logo</button>`);
     removeLogoBtn.onclick = ()=>{ state.club.logo = null; saveState(); showToast("Logo removed"); render(); };
     brandCard.appendChild(removeLogoBtn);
   }
-
   const brandSaveBtn = el(`<button class="btn" style="margin-top:16px; display:block;">Save club name</button>`);
   brandSaveBtn.onclick = ()=>{
     state.club.name = nameField.querySelector('input').value.trim() || "Lions Club";
     saveState(); showToast("Club name saved"); render();
   };
   brandCard.appendChild(brandSaveBtn);
-
   logoInputWrap.querySelector('input').onchange = (e)=>{
     const file = e.target.files[0];
     if(!file) return;
-    const reader = new FileReader();
-    reader.onload = ()=>{
-      const img = new Image();
-      img.onload = ()=>{
-        const maxDim = 240;
-        let w = img.width, h = img.height;
-        if(w>=h){ if(w>maxDim){ h = Math.round(h*maxDim/w); w = maxDim; } }
-        else { if(h>maxDim){ w = Math.round(w*maxDim/h); h = maxDim; } }
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        state.club.logo = canvas.toDataURL('image/png');
-        saveState(); showToast("Logo updated"); render();
-      };
-      img.onerror = ()=> showToast("Couldn't read that image — try a different file");
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
+    readImageAsDataUrl(file, 240,
+      (dataUrl)=>{ state.club.logo = dataUrl; saveState(); showToast("Logo updated"); render(); },
+      ()=> showToast("Couldn't read that image — try a different file"));
   };
   wrap.appendChild(brandCard);
+
+  // --- Address & contact ---
+  const contactCard = el(`<div class="card" style="max-width:560px; margin-bottom:20px;"></div>`);
+  contactCard.appendChild(el(`<div class="section-title">Address & contact<div class="rule"></div></div>`));
+  contactCard.appendChild(el(`<p class="section-sub">Shown at the top of invoices and receipts.</p>`));
+  const addressField = el(`<div class="field" style="margin-bottom:14px;">
+    <label>Club address</label>
+    <textarea id="s-address" rows="3" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'Inter', sans-serif; font-size:13.5px; resize:vertical;" placeholder="e.g.&#10;123 Main Road&#10;Fish Hoek, Cape Town&#10;7975">${state.club.address||""}</textarea>
+  </div>`);
+  contactCard.appendChild(addressField);
+  const contactRow = el(`<div class="form-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="field"><label>Phone</label><input type="text" id="s-phone" value="${state.club.phone||""}" placeholder="e.g. 021 555 0123"></div>
+    <div class="field"><label>Club email</label><input type="email" id="s-email" value="${state.club.email||""}" placeholder="info@club.org"></div>
+  </div>`);
+  contactCard.appendChild(contactRow);
+  const contactSaveBtn = el(`<button class="btn" style="margin-top:16px; display:block;">Save address & contact</button>`);
+  contactSaveBtn.onclick = ()=>{
+    state.club.address = addressField.querySelector('textarea').value.trim();
+    state.club.phone = contactRow.querySelector('#s-phone').value.trim();
+    state.club.email = contactRow.querySelector('#s-email').value.trim();
+    saveState(); showToast("Address & contact saved"); render();
+  };
+  contactCard.appendChild(contactSaveBtn);
+  wrap.appendChild(contactCard);
+
+  // --- Banking details ---
+  const bankCard = el(`<div class="card" style="max-width:560px; margin-bottom:20px;"></div>`);
+  bankCard.appendChild(el(`<div class="section-title">Banking details<div class="rule"></div></div>`));
+  bankCard.appendChild(el(`<p class="section-sub">Shown at the bottom of member statements, invoices, and receipts, so people know where to pay.</p>`));
+  const bankField = el(`<div class="field">
+    <textarea id="s-bankdetails" rows="4" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'IBM Plex Mono', monospace; font-size:12.5px; resize:vertical;" placeholder="e.g.&#10;Bank: First National Bank&#10;Account name: Fish Hoek Lions Club&#10;Account number: 000000000&#10;Branch code: 000000">${state.club.bankDetails||""}</textarea>
+  </div>`);
+  bankCard.appendChild(bankField);
+  const bankSaveBtn = el(`<button class="btn" style="margin-top:16px; display:block;">Save banking details</button>`);
+  bankSaveBtn.onclick = ()=>{
+    state.club.bankDetails = bankField.querySelector('textarea').value.trim();
+    saveState(); showToast("Banking details saved"); render();
+  };
+  bankCard.appendChild(bankSaveBtn);
+  wrap.appendChild(bankCard);
+
+  // --- Office bearers & signatures ---
+  const sigCard = el(`<div class="card" style="max-width:560px; margin-bottom:20px;"></div>`);
+  sigCard.appendChild(el(`<div class="section-title">Office bearers & signatures<div class="rule"></div></div>`));
+  sigCard.appendChild(el(`<p class="section-sub">Appears as a sign-off block at the bottom of reports, for when they're submitted to members.</p>`));
+
+  const officerBlock = (label, nameVal, nameId, sigKey, sigInputId)=>{
+    const box = el(`<div style="margin-bottom:18px; padding-bottom:18px; border-bottom:1px solid var(--card-border);"></div>`);
+    box.appendChild(el(`<div class="field" style="margin-bottom:10px;"><label>${label} name</label><input type="text" id="${nameId}" value="${nameVal||""}" placeholder="Full name"></div>`));
+    const sigRow = el(`<div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;"></div>`);
+    const sigPreview = el(`<div style="width:120px;height:44px;border:1px dashed var(--card-border); border-radius:6px; display:flex; align-items:center; justify-content:center; background:#fff; flex-shrink:0;">${state.club[sigKey]?`<img src="${state.club[sigKey]}" style="max-width:100%; max-height:100%; object-fit:contain;">`:`<span class="muted" style="font-size:10px;">No signature</span>`}</div>`);
+    const sigInputWrap = el(`<div><label style="display:block; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin-bottom:5px;">${label} signature</label><input type="file" accept="image/*" id="${sigInputId}"></div>`);
+    sigRow.appendChild(sigPreview); sigRow.appendChild(sigInputWrap);
+    box.appendChild(sigRow);
+    if(state.club[sigKey]){
+      const removeBtn = el(`<button class="btn ghost small" style="margin-top:8px;">Remove signature</button>`);
+      removeBtn.onclick = ()=>{ state.club[sigKey] = null; saveState(); showToast("Signature removed"); render(); };
+      box.appendChild(removeBtn);
+    }
+    sigInputWrap.querySelector('input').onchange = (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      readImageAsDataUrl(file, 200,
+        (dataUrl)=>{ state.club[sigKey] = dataUrl; saveState(); showToast(`${label} signature updated`); render(); },
+        ()=> showToast("Couldn't read that image — try a different file"));
+    };
+    return box;
+  };
+
+  const presidentBox = officerBlock("President", state.club.presidentName, "s-presidentname", "presidentSignature", "s-president-sig");
+  sigCard.appendChild(presidentBox);
+  const treasurerBox = officerBlock("Treasurer", state.club.treasurerName, "s-treasurername", "treasurerSignature", "s-treasurer-sig");
+  treasurerBox.style.marginBottom = "0"; treasurerBox.style.paddingBottom = "0"; treasurerBox.style.borderBottom = "none";
+  treasurerBox.querySelector('.field').insertAdjacentElement('afterend', el(`<div class="field" style="margin-bottom:10px;"><label>Treasurer email</label><input type="email" id="s-treasureremail" value="${state.club.treasurerEmail||""}" placeholder="treasurer@club.org"></div>`));
+  sigCard.appendChild(treasurerBox);
+
+  const sigSaveBtn = el(`<button class="btn" style="margin-top:18px; display:block;">Save office bearers</button>`);
+  sigSaveBtn.onclick = ()=>{
+    state.club.presidentName = presidentBox.querySelector('#s-presidentname').value.trim();
+    state.club.treasurerName = treasurerBox.querySelector('#s-treasurername').value.trim();
+    state.club.treasurerEmail = treasurerBox.querySelector('#s-treasureremail').value.trim();
+    saveState(); showToast("Office bearers saved"); render();
+  };
+  sigCard.appendChild(sigSaveBtn);
+  wrap.appendChild(sigCard);
 
   const catCard = el(`<div class="card" style="max-width:560px; margin-bottom:20px;"></div>`);
   catCard.appendChild(el(`<div class="section-title">Categories<div class="rule"></div></div>`));
