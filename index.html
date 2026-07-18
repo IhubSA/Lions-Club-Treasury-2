@@ -122,6 +122,14 @@
   .statement-row.total{ font-weight:700; border-bottom:none; border-top:2px solid var(--ink); margin-top:4px; padding-top:8px; }
   .statement-row .amt.zero{ color:#C9C2AD; }
 
+  .statement-table{ width:100%; border-collapse:collapse; font-size:13px; }
+  .statement-table th{ text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); padding:8px 10px; border-bottom:2px solid var(--ink); }
+  .statement-table td{ padding:6px 10px; border-bottom:1px dashed #E6DFC9; }
+  .statement-table td.zero{ color:#C9C2AD; }
+  .statement-table .col-divider{ border-left:1px solid var(--card-border); }
+  .statement-table tr:last-child td{ border-bottom:none; }
+  .statement-table .total-row td{ font-weight:700; border-bottom:none; border-top:2px solid var(--ink); padding-top:9px; }
+
   .balance-strip{ display:flex; gap:16px; margin-top:18px; flex-wrap:wrap; }
   .balance-box{ flex:1; min-width:200px; padding:14px 16px; border-radius:10px; background:linear-gradient(135deg,#F1EAD6,#F7F3E6); border:1px solid var(--card-border);}
   .balance-box .label{ font-size:11px; text-transform:uppercase; color:var(--ink-soft); letter-spacing:.05em;}
@@ -161,6 +169,8 @@
     .app{ display:block; max-width:100%; }
     main{ padding:0; }
     .card{ box-shadow:none; border:1px solid #ccc; break-inside:avoid; margin-bottom:14px; background:#fff; }
+    .report-card{ break-inside:auto; }
+    table tr{ break-inside:avoid; }
     .page-head{ margin-bottom:10px; }
     .fy-pill{ box-shadow:none; }
     table{ font-size:11.5px; }
@@ -846,18 +856,26 @@ function renderReports(){
     const stmt = monthlyStatement(period, state.ui.reportAccount, state.ui.reportMonth);
     const openingCF = balanceCarriedForwardBefore(period, state.ui.reportAccount, state.ui.reportMonth);
     const closingCF = openingCF + stmt.totalIncome - stmt.totalExpense;
-    const card = el(`<div class="card"></div>`);
+    const card = el(`<div class="card report-card"></div>`);
     card.appendChild(el(`<div class="section-title">${state.club.name} — ${state.ui.reportAccount} Account — ${monthDisplay(state.ui.reportMonth)}<div class="rule"></div></div>`));
-    const statement = el(`<div class="statement"></div>`);
-    const incomeCol = el(`<div class="statement-col"><h3>Income</h3></div>`);
-    const expenseCol = el(`<div class="statement-col"><h3>Expenses</h3></div>`);
+    const statement = el(`<table class="statement-table"><thead><tr>
+      <th>Income</th><th class="right">Amount</th><th class="col-divider">Expenses</th><th class="right">Amount</th>
+    </tr></thead><tbody></tbody><tfoot></tfoot></table>`);
+    const stb = statement.querySelector('tbody');
     stmt.rows.forEach(r=>{
-      incomeCol.appendChild(el(`<div class="statement-row"><span>${r.cat}</span><span class="amt num ${r.income?'':'zero'}">${fmtMoney(r.income)}</span></div>`));
-      expenseCol.appendChild(el(`<div class="statement-row"><span>${r.cat}</span><span class="amt num ${r.expense?'':'zero'}">${fmtMoney(r.expense)}</span></div>`));
+      stb.appendChild(el(`<tr>
+        <td>${r.cat}</td>
+        <td class="right num ${r.income?'':'zero'}">${fmtMoney(r.income)}</td>
+        <td class="col-divider">${r.cat}</td>
+        <td class="right num ${r.expense?'':'zero'}">${fmtMoney(r.expense)}</td>
+      </tr>`));
     });
-    incomeCol.appendChild(el(`<div class="statement-row total"><span>Total income</span><span class="amt num pos">${fmtMoney(stmt.totalIncome)}</span></div>`));
-    expenseCol.appendChild(el(`<div class="statement-row total"><span>Total expenses</span><span class="amt num neg">${fmtMoney(stmt.totalExpense)}</span></div>`));
-    statement.appendChild(incomeCol); statement.appendChild(expenseCol);
+    statement.querySelector('tfoot').appendChild(el(`<tr class="total-row">
+      <td>Total income</td>
+      <td class="right num pos">${fmtMoney(stmt.totalIncome)}</td>
+      <td class="col-divider">Total expenses</td>
+      <td class="right num neg">${fmtMoney(stmt.totalExpense)}</td>
+    </tr>`));
     card.appendChild(statement);
     const strip = el(`<div class="balance-strip"></div>`);
     strip.appendChild(el(`<div class="balance-box"><div class="label">Balance brought forward</div><div class="val num">${fmtMoney(openingCF)}</div></div>`));
