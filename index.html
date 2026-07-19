@@ -1169,7 +1169,7 @@ async function emailMemberStatement(member, triggerBtn){
   const original = triggerBtn ? triggerBtn.textContent : null;
   if(triggerBtn){ triggerBtn.disabled = true; triggerBtn.textContent = "Sending…"; }
   try{
-    const { data, error } = await withTimeout(sb.functions.invoke('send-statement', {
+    const { data, error } = await withTimeout(sb.functions.invoke('send-Statement', {
       body: {
         to: member.email,
         subject: `${state.club.name} — Dues Statement`,
