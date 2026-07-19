@@ -1158,6 +1158,7 @@ function downloadMemberStatement(member){
   doc.save(`${member.name.replace(/\s+/g,'_')}_Dues_Statement.pdf`);
 }
 
+// Automatic send via the Supabase Edge Function + Resend (needs setup — see Settings).
 async function emailMemberStatement(member, triggerBtn){
   if(!member.email){ showToast(`${member.name} has no email address on file`); return; }
   if(!useSupabase || !sb){ showToast("Emailing needs this app connected to Supabase"); return; }
@@ -1182,7 +1183,7 @@ async function emailMemberStatement(member, triggerBtn){
     return true;
   }catch(e){
     console.error("Email send failed:", e);
-    showToast(`Couldn't email ${member.name} — check the email setup`);
+    showToast(`Couldn't email ${member.name} — check the email setup in Settings`);
     return false;
   }finally{
     if(triggerBtn){ triggerBtn.disabled = false; triggerBtn.textContent = original; }
@@ -1205,6 +1206,22 @@ async function emailAllMemberStatements(triggerBtn){
   triggerBtn.textContent = original;
   const skipped = state.dues.length - recipients.length;
   showToast(`Sent ${sent} statement(s)${failed?`, ${failed} failed`:''}${skipped?`, ${skipped} skipped (no email)`:''}`);
+}
+
+// Zero-setup fallback: downloads the PDF and opens a pre-filled email draft
+// for the user to manually attach and send. Not currently wired to any
+// button, kept here in case automatic sending needs to be switched off again.
+function emailMemberStatementManual(member){
+  if(!member.email){ showToast(`${member.name} has no email address on file`); return; }
+  const doc = buildMemberStatementPdf(member);
+  if(!doc) return;
+  const fileName = `${member.name.replace(/\s+/g,'_')}_Dues_Statement.pdf`;
+  doc.save(fileName);
+  const firstName = member.name.split(' ')[0];
+  const subject = `${state.club.name} — Dues Statement`;
+  const body = `Hi ${firstName},\n\nPlease find your latest dues statement attached — it was just downloaded to your computer as "${fileName}", so please attach it to this email before sending.\n\nCurrent balance owing: ${fmtMoney(member.owing)}\n\nKind regards,\n${state.club.name}`;
+  const mailto = `mailto:${encodeURIComponent(member.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.location.href = mailto;
 }
 
 function addPdfFooterDetails(doc, marginX, y, bankDetailsText){
