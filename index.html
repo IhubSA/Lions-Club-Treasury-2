@@ -822,10 +822,21 @@ function renderLedger(){
   state.ui.ledgerFilter = state.ui.ledgerFilter || { account:"All", month:"All", search:"" };
   state.ui.formAccount = state.ui.formAccount || "Admin";
   state.ui.formKind = state.ui.formKind || "Income";
+  state.ui.ledgerPeriod = state.ui.ledgerPeriod || "current";
   const ledgerFilter = state.ui.ledgerFilter;
-  const period = getPeriod("current");
+  const period = getPeriod(state.ui.ledgerPeriod);
 
   const wrap = el(`<div></div>`);
+
+  const periodRow = el(`<div class="filters no-print" style="margin-bottom:4px;"></div>`);
+  const periodSel = el(`<select>${periodOptions().map(([id,label])=>`<option value="${id}" ${id===state.ui.ledgerPeriod?'selected':''}>${label}</option>`).join('')}</select>`);
+  periodSel.onchange = ()=>{ state.ui.ledgerPeriod = periodSel.value; state.ui.ledgerFilter = { account:"All", month:"All", search:"" }; render(); };
+  periodRow.appendChild(periodSel);
+  wrap.appendChild(periodRow);
+
+  if(period.closed){
+    wrap.appendChild(el(`<div class="card no-print" style="margin-bottom:20px; background:#F1EAD6;"><div class="section-title">🔒 Viewing a closed year<div class="rule"></div></div><p class="section-sub" style="margin-bottom:0;">This year's ledger is read-only — switch back to "Current" above to add new transactions.</p></div>`));
+  } else {
   const formCard = el(`<div class="card no-print" style="margin-bottom:20px;"></div>`);
   formCard.appendChild(el(`<div class="section-title">New transaction<div class="rule"></div></div>`));
   formCard.appendChild(el(`<p class="section-sub">Record income or an expense, then allocate it to the Admin or Projects account.</p>`));
@@ -844,6 +855,15 @@ function renderLedger(){
     <div class="field"><label>Amount (R)</label><input type="number" id="f-amount" step="0.01" placeholder="0.00"></div>
   </div>`);
   formCard.appendChild(form);
+  let memberLinkRow = null;
+  if(state.ui.formKind==='Income' && state.dues.length>0){
+    memberLinkRow = el(`<div class="field" style="max-width:320px; margin-top:14px;">
+      <label>Credit a member's dues (optional)</label>
+      <select id="f-member"><option value="">— No member —</option>${[...state.dues].sort((a,b)=>a.name.localeCompare(b.name)).map(m=>`<option value="${m.id}">${m.name} (owes ${fmtMoney(m.owing)})</option>`).join('')}</select>
+      <p class="section-sub" style="margin-top:6px; margin-bottom:0;">Reduces their balance owing by this amount automatically.</p>
+    </div>`);
+    formCard.appendChild(memberLinkRow);
+  }
   const attachRow = el(`<div class="field" style="max-width:360px; margin-top:14px;"><label>Attach a slip / invoice (optional)</label><input type="file" id="f-attachment" accept="image/*,.pdf">${useSupabase?'':'<div class="muted" style="font-size:11.5px; margin-top:5px;">Connect Supabase to enable attachments.</div>'}</div>`);
   formCard.appendChild(attachRow);
   const submitRow = el(`<div style="margin-top:14px; display:flex; gap:10px;"><button class="btn" id="f-submit">Add to ledger</button><span class="muted" id="f-hint" style="align-self:center; font-size:12.5px;"></span></div>`);
@@ -857,8 +877,9 @@ function renderLedger(){
   submitBtn.onclick = async ()=>{
     const date = form.querySelector('#f-date').value;
     const type = form.querySelector('#f-type').value;
-    const ref = form.querySelector('#f-ref').value.trim();
+    let ref = form.querySelector('#f-ref').value.trim();
     const amount = parseFloat(form.querySelector('#f-amount').value)||0;
+    const memberId = memberLinkRow ? memberLinkRow.querySelector('#f-member').value : "";
     if(!date){ hint.textContent="Please pick a date."; return; }
     if(amount<=0){ hint.textContent="Enter an amount greater than zero."; return; }
     const income = state.ui.formKind==='Income' ? amount : 0;
@@ -872,11 +893,25 @@ function renderLedger(){
       attachment = await uploadAttachment(file);
     }
 
-    state.transactions.push({ id: uid(), date, account: state.ui.formAccount, type, reference: ref, income, expense, attachment });
+    let linkedMember = null;
+    if(memberId){
+      linkedMember = state.dues.find(m=>m.id===memberId);
+      if(linkedMember && !ref) ref = linkedMember.name;
+    }
+
+    const newTxn = { id: uid(), date, account: state.ui.formAccount, type, reference: ref, income, expense, attachment, memberId: linkedMember ? linkedMember.id : null };
+    state.transactions.push(newTxn);
+
+    if(linkedMember){
+      linkedMember.owing -= income;
+      linkedMember.history.push({ date, kind:"payment", amount: income, note:`Ledger — ${type}`, linkedTransactionId: newTxn.id });
+    }
+
     saveState();
-    showToast(`${state.ui.formKind} of ${fmtMoney(amount)} added to ${state.ui.formAccount}`);
+    showToast(`${state.ui.formKind} of ${fmtMoney(amount)} added to ${state.ui.formAccount}${linkedMember?` — credited to ${linkedMember.name}`:''}`);
     render();
   };
+  }
 
   const filterRow = el(`<div class="filters no-print"></div>`);
   const accSel = el(`<select><option>All</option><option>Admin</option><option>Projects</option></select>`);
@@ -903,7 +938,7 @@ function renderLedger(){
 function renderLedgerTable(holder, period){
   const ledgerFilter = state.ui.ledgerFilter;
   holder.innerHTML = "";
-  let rows = [...state.transactions].sort((a,b)=> (b.date||"").localeCompare(a.date||""));
+  let rows = [...period.transactions].sort((a,b)=> (b.date||"").localeCompare(a.date||""));
   if(ledgerFilter.account!=="All") rows = rows.filter(t=>t.account===ledgerFilter.account);
   if(ledgerFilter.month!=="All") rows = rows.filter(t=>monthKey(t.date)===ledgerFilter.month);
   if(ledgerFilter.search.trim()){
@@ -911,53 +946,62 @@ function renderLedgerTable(holder, period){
     rows = rows.filter(t=> (t.reference||"").toLowerCase().includes(q) || (t.type||"").toLowerCase().includes(q));
   }
   if(rows.length===0){
-    holder.appendChild(el(`<div class="empty"><div class="big">No matching transactions</div>Try adjusting your filters, or add a new entry above.</div>`));
+    holder.appendChild(el(`<div class="empty"><div class="big">No matching transactions</div>Try adjusting your filters${period.closed?'':', or add a new entry above'}.</div>`));
     return;
   }
-  const tbl = el(`<table><thead><tr><th>Date</th><th>Account</th><th>Category</th><th>Reference</th><th class="right">Income</th><th class="right">Expense</th><th style="width:90px;">Attachment</th><th></th></tr></thead><tbody></tbody></table>`);
+  const tbl = el(`<table><thead><tr><th>Date</th><th>Account</th><th>Category</th><th>Reference</th><th class="right">Income</th><th class="right">Expense</th><th style="width:90px;">Attachment</th>${period.closed?'':'<th></th>'}</tr></thead><tbody></tbody></table>`);
   const tb = tbl.querySelector('tbody');
   rows.forEach(t=>{
     const tr = el(`<tr>
       <td class="muted">${fmtDate(t.date)}</td>
       <td><span class="tag ${t.account.toLowerCase()}">${t.account}</span></td>
       <td>${t.type}</td>
-      <td class="muted">${t.reference||"—"}</td>
+      <td class="muted">${t.reference||"—"}${t.memberId?` <span title="Credited to member dues" style="color:var(--income);">👤</span>`:""}</td>
       <td class="right num pos">${t.income? fmtMoney(t.income):""}</td>
       <td class="right num neg">${t.expense? fmtMoney(t.expense):""}</td>
       <td class="right" style="white-space:nowrap;">
         ${t.attachment?.url?`<a href="${t.attachment.url}" target="_blank" rel="noopener" title="View ${t.attachment.name||'attachment'}" style="margin-right:6px;">📎</a>`:""}
-        <span class="no-print">
+        ${period.closed?"":`<span class="no-print">
           <button class="btn ghost small" data-act="attach">${t.attachment?.url?'Replace':'Attach'}</button>
           <input type="file" accept="image/*,.pdf" style="display:none;">
-        </span>
+        </span>`}
       </td>
-      <td class="right no-print"><button class="btn ghost small" data-act="delete">Delete</button></td>
+      ${period.closed?"":'<td class="right no-print"><button class="btn ghost small" data-act="delete">Delete</button></td>'}
     </tr>`);
-    const fileInput = tr.querySelector('input[type=file]');
-    tr.querySelector('[data-act=attach]').onclick = ()=> fileInput.click();
-    fileInput.onchange = async ()=>{
-      const file = fileInput.files[0];
-      if(!file) return;
-      const btn = tr.querySelector('[data-act=attach]');
-      const oldLabel = btn.textContent;
-      btn.disabled = true; btn.textContent = "Uploading…";
-      const oldAttachment = t.attachment;
-      const uploaded = await uploadAttachment(file);
-      if(uploaded){
-        t.attachment = uploaded;
-        if(oldAttachment?.path) deleteAttachment(oldAttachment.path);
-        saveState();
-        showToast("Attachment saved");
-        renderLedgerTable(holder, period);
-      } else {
-        btn.disabled = false; btn.textContent = oldLabel;
-      }
-    };
-    makeConfirmDelete(tr.querySelector('[data-act=delete]'), ()=>{
-      if(t.attachment?.path) deleteAttachment(t.attachment.path);
-      state.transactions = state.transactions.filter(x=>x.id!==t.id);
-      saveState(); renderLedgerTable(holder, period); showToast("Transaction removed");
-    }, "Confirm?");
+    if(!period.closed){
+      const fileInput = tr.querySelector('input[type=file]');
+      tr.querySelector('[data-act=attach]').onclick = ()=> fileInput.click();
+      fileInput.onchange = async ()=>{
+        const file = fileInput.files[0];
+        if(!file) return;
+        const btn = tr.querySelector('[data-act=attach]');
+        const oldLabel = btn.textContent;
+        btn.disabled = true; btn.textContent = "Uploading…";
+        const oldAttachment = t.attachment;
+        const uploaded = await uploadAttachment(file);
+        if(uploaded){
+          t.attachment = uploaded;
+          if(oldAttachment?.path) deleteAttachment(oldAttachment.path);
+          saveState();
+          showToast("Attachment saved");
+          renderLedgerTable(holder, period);
+        } else {
+          btn.disabled = false; btn.textContent = oldLabel;
+        }
+      };
+      makeConfirmDelete(tr.querySelector('[data-act=delete]'), ()=>{
+        if(t.attachment?.path) deleteAttachment(t.attachment.path);
+        if(t.memberId){
+          const member = state.dues.find(m=>m.id===t.memberId);
+          if(member){
+            member.owing += t.income;
+            member.history = member.history.filter(h=> h.linkedTransactionId !== t.id);
+          }
+        }
+        state.transactions = state.transactions.filter(x=>x.id!==t.id);
+        saveState(); renderLedgerTable(holder, period); showToast("Transaction removed");
+      }, "Confirm?");
+    }
     tb.appendChild(tr);
   });
   holder.appendChild(tbl);
@@ -1116,9 +1160,13 @@ function renderBalanceSheet(){
   card.appendChild(tbl);
 
   const closeArea = el(`<div class="no-print" style="margin-top:18px;"></div>`);
+  const btnRow = el(`<div style="display:flex; gap:10px; flex-wrap:wrap;"></div>`);
   const closeBtn = el(`<button class="btn ghost">Close this financial year</button>`);
+  const auditBtn = el(`<button class="btn ghost">Export audit pack (PDF)</button>`);
+  auditBtn.onclick = ()=> downloadAuditPack("current");
   closeArea.appendChild(el(`<p class="section-sub" style="margin-top:14px;">Closing the year archives every transaction above, carries the closing balances forward as next year's opening balances, and starts a fresh ledger for the new financial year.</p>`));
-  closeArea.appendChild(closeBtn);
+  btnRow.appendChild(closeBtn); btnRow.appendChild(auditBtn);
+  closeArea.appendChild(btnRow);
   card.appendChild(closeArea);
 
   closeBtn.onclick = ()=>{
@@ -1147,9 +1195,18 @@ function renderBalanceSheet(){
         <td class="right num">${fmtMoney(cy.closingBalances.Admin)}</td>
         <td class="right num">${fmtMoney(cy.closingBalances.Projects)}</td>
         <td class="right num" style="font-weight:700;">${fmtMoney(combined)}</td>
-        <td class="right"><button class="btn ghost small">View reports</button></td>
+        <td class="right no-print" style="white-space:nowrap;">
+          <button class="btn ghost small" data-act="view">View reports</button>
+          <button class="btn ghost small" data-act="audit">Audit pack</button>
+          <button class="btn ghost small" data-act="delete">Delete</button>
+        </td>
       </tr>`);
-      tr.querySelector('button').onclick = ()=>{ state.tab="reports"; state.ui.reportPeriod = cy.id; render(); };
+      tr.querySelector('[data-act=view]').onclick = ()=>{ state.tab="reports"; state.ui.reportPeriod = cy.id; render(); };
+      tr.querySelector('[data-act=audit]').onclick = ()=> downloadAuditPack(cy.id);
+      makeConfirmDelete(tr.querySelector('[data-act=delete]'), ()=>{
+        state.closedYears = state.closedYears.filter(x=>x.id!==cy.id);
+        saveState(); showToast(`Closed year ${shortFYLabel(cy.fiscalYear)} deleted`); render();
+      }, "Confirm?");
       htb.appendChild(tr);
     });
     histCard.appendChild(htbl);
@@ -1331,6 +1388,187 @@ function addPdfFooterDetails(doc, marginX, y, bankDetailsText){
   }
   doc.setTextColor(20,20,20);
   return y;
+}
+
+function buildAuditPackPdf(periodId){
+  if(!window.jspdf || !window.jspdf.jsPDF){ showToast("PDF library still loading — try again in a moment"); return null; }
+  const period = getPeriod(periodId);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const marginX = 15, rightX = 195;
+  let y = 20;
+
+  function drawRunningHeader(){
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90,100,115);
+    doc.text(`${state.club.name} — Audit Pack — FY ${shortFYLabel(period.fiscalYear)}`, marginX, 12);
+    doc.setDrawColor(200,154,62); doc.setLineWidth(0.4); doc.line(marginX, 15, rightX, 15);
+    doc.setTextColor(20,20,20);
+  }
+  function newPage(title){
+    doc.addPage();
+    y = 20;
+    drawRunningHeader();
+    if(title){
+      doc.setFont('helvetica','bold'); doc.setFontSize(14);
+      doc.text(title, marginX, y);
+      y += 10;
+      doc.setFont('helvetica','normal'); doc.setFontSize(10.5);
+    }
+  }
+  function checkPageBreak(threshold){
+    if(y > (threshold||275)){
+      doc.addPage(); y = 20; drawRunningHeader();
+      doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+    }
+  }
+  const mny = (n)=> fmtMoney(n).replace('R ','');
+
+  /* ---- Cover page ---- */
+  y = 40;
+  if(state.club.logo){ try{ doc.addImage(state.club.logo, 'PNG', 95, y, 20, 20); }catch(e){} y += 26; }
+  doc.setFont('helvetica','bold'); doc.setFontSize(20); doc.setTextColor(20,42,70);
+  doc.text(state.club.name, 105, y, {align:'center'}); y += 10;
+  doc.setFontSize(14); doc.setTextColor(90,100,115);
+  doc.text('Financial Audit Pack', 105, y, {align:'center'}); y += 8;
+  doc.setFontSize(11);
+  doc.text(`Financial Year: ${fyDateRangeLabel(period.fiscalYear)}`, 105, y, {align:'center'}); y += 20;
+  doc.setTextColor(20,20,20); doc.setFontSize(9.5);
+  if(state.club.address && state.club.address.trim()){
+    state.club.address.trim().split('\n').forEach(line=>{ doc.text(line, 105, y, {align:'center'}); y += 5; });
+  }
+  const contactBits = [state.club.phone, state.club.email].filter(Boolean).join('   •   ');
+  if(contactBits){ doc.text(contactBits, 105, y, {align:'center'}); y += 5; }
+  y += 15;
+  doc.setDrawColor(200,154,62); doc.setLineWidth(0.6); doc.line(60, y, 150, y); y += 12;
+  doc.setFontSize(9.5); doc.setTextColor(90,100,115);
+  doc.text(`Prepared: ${fmtDate(new Date().toISOString().slice(0,10))}`, 105, y, {align:'center'}); y += 6;
+  if(state.club.treasurerName){ doc.text(`Treasurer: ${state.club.treasurerName}`, 105, y, {align:'center'}); y += 6; }
+  if(state.club.presidentName){ doc.text(`President: ${state.club.presidentName}`, 105, y, {align:'center'}); y += 6; }
+  if(period.closed){ doc.setTextColor(47,111,79); doc.text('🔒 Closed financial year — figures are final', 105, y, {align:'center'}); }
+  doc.setTextColor(20,20,20);
+
+  /* ---- Balance sheet summary ---- */
+  newPage('Balance Sheet Summary');
+  const admin = accountTotalsFor(period, 'Admin');
+  const projects = accountTotalsFor(period, 'Projects');
+  const bsRows = [
+    ['Admin', admin.opening, admin.income, admin.expense, admin.balance],
+    ['Projects', projects.opening, projects.income, projects.expense, projects.balance],
+    ['Combined', admin.opening+projects.opening, admin.income+projects.income, admin.expense+projects.expense, admin.balance+projects.balance]
+  ];
+  const bc = { a:marginX, b:80, c:115, d:150, e:rightX };
+  doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+  doc.text('Account', bc.a, y); doc.text('Opening', bc.b, y, {align:'right'}); doc.text('Income', bc.c, y, {align:'right'}); doc.text('Expense', bc.d, y, {align:'right'}); doc.text('Closing', bc.e, y, {align:'right'});
+  y += 2.5; doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y); y += 6.5;
+  bsRows.forEach((r,i)=>{
+    doc.setFont('helvetica', i===2 ? 'bold' : 'normal');
+    doc.text(r[0], bc.a, y);
+    doc.text(mny(r[1]), bc.b, y, {align:'right'});
+    doc.text(mny(r[2]), bc.c, y, {align:'right'});
+    doc.text(mny(r[3]), bc.d, y, {align:'right'});
+    doc.text(mny(r[4]), bc.e, y, {align:'right'});
+    y += 7;
+  });
+
+  /* ---- Per-account monthly + category summary ---- */
+  ['Admin','Projects'].forEach(account=>{
+    newPage(`${account} Account — Monthly Summary`);
+    const monthly = categoryReport(period, account, 'All');
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+    doc.text('Month', marginX, y); doc.text('Income', 120, y, {align:'right'}); doc.text('Expense', 155, y, {align:'right'}); doc.text('Net', rightX, y, {align:'right'});
+    y += 2.5; doc.setDrawColor(19,42,70); doc.line(marginX, y, rightX, y); y += 6.5;
+    doc.setFont('helvetica','normal');
+    monthly.rows.forEach(r=>{
+      checkPageBreak();
+      doc.text(monthDisplay(r.month), marginX, y);
+      doc.text(r.income? mny(r.income):'–', 120, y, {align:'right'});
+      doc.text(r.expense? mny(r.expense):'–', 155, y, {align:'right'});
+      doc.text(mny(r.income-r.expense), rightX, y, {align:'right'});
+      y += 7;
+    });
+    y += 3; doc.setDrawColor(19,42,70); doc.setLineWidth(0.5); doc.line(marginX, y, rightX, y); y += 8;
+    doc.setFont('helvetica','bold');
+    doc.text('Total', marginX, y);
+    doc.text(mny(monthly.totalIncome), 120, y, {align:'right'});
+    doc.text(mny(monthly.totalExpense), 155, y, {align:'right'});
+    doc.text(mny(monthly.totalIncome-monthly.totalExpense), rightX, y, {align:'right'});
+    y += 16;
+
+    checkPageBreak(235);
+    doc.setFont('helvetica','bold'); doc.setFontSize(11);
+    doc.text(`${account} Account — Category Totals`, marginX, y); y += 9;
+    doc.setFontSize(9.5);
+    doc.text('Category', marginX, y); doc.text('Income', 140, y, {align:'right'}); doc.text('Expense', rightX, y, {align:'right'});
+    y += 2.5; doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y); y += 6.5;
+    doc.setFont('helvetica','normal');
+    let anyCat = false;
+    allCategoriesFor(period).forEach(cat=>{
+      let inc=0, exp=0;
+      period.transactions.forEach(t=>{ if(t.account===account && t.type===cat){ inc += Number(t.income)||0; exp += Number(t.expense)||0; } });
+      if(inc===0 && exp===0) return;
+      anyCat = true;
+      checkPageBreak();
+      doc.text(cat, marginX, y);
+      doc.text(inc? mny(inc):'–', 140, y, {align:'right'});
+      doc.text(exp? mny(exp):'–', rightX, y, {align:'right'});
+      y += 7;
+    });
+    if(!anyCat){ doc.setTextColor(120); doc.text('No transactions recorded for this account.', marginX, y); doc.setTextColor(20,20,20); }
+  });
+
+  /* ---- Full transaction ledger ---- */
+  newPage('Full Transaction Ledger');
+  const lc = { date:marginX, acc:38, cat:60, ref:102, inc:158, exp:rightX };
+  function drawLedgerHeader(){
+    doc.setFont('helvetica','bold'); doc.setFontSize(8.5);
+    doc.text('Date', lc.date, y); doc.text('Account', lc.acc, y); doc.text('Category', lc.cat, y); doc.text('Reference', lc.ref, y);
+    doc.text('Income', lc.inc, y, {align:'right'}); doc.text('Expense', lc.exp, y, {align:'right'});
+    y += 2; doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y); y += 5.5;
+    doc.setFont('helvetica','normal');
+  }
+  doc.setFontSize(8.5);
+  drawLedgerHeader();
+  const sortedTxns = [...period.transactions].sort((a,b)=> (a.date||"").localeCompare(b.date||""));
+  if(sortedTxns.length===0){
+    doc.setTextColor(120); doc.text('No transactions recorded for this financial year.', marginX, y); doc.setTextColor(20,20,20);
+  }
+  sortedTxns.forEach(t=>{
+    if(y > 280){ doc.addPage(); y = 20; drawRunningHeader(); doc.setFontSize(8.5); drawLedgerHeader(); }
+    doc.text(fmtDate(t.date), lc.date, y);
+    doc.text(t.account, lc.acc, y);
+    doc.text((t.type||'').slice(0,20), lc.cat, y);
+    doc.text((t.reference||'—').slice(0,26), lc.ref, y);
+    doc.text(t.income? mny(t.income):'', lc.inc, y, {align:'right'});
+    doc.text(t.expense? mny(t.expense):'', lc.exp, y, {align:'right'});
+    y += 5.5;
+  });
+
+  /* ---- Sign-off page ---- */
+  newPage('Sign-off');
+  y += 25;
+  function drawSig(label, name, sigImg, x){
+    if(sigImg){ try{ doc.addImage(sigImg, 'PNG', x, y-16, 36, 14); }catch(e){} }
+    doc.setDrawColor(20,20,20); doc.setLineWidth(0.3); doc.line(x, y, x+80, y);
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+    doc.text(name||'', x, y+6);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(90,100,115);
+    doc.text(label, x, y+11);
+    doc.setTextColor(20,20,20);
+  }
+  drawSig('President', state.club.presidentName, state.club.presidentSignature, marginX);
+  drawSig('Treasurer', state.club.treasurerName, state.club.treasurerSignature, marginX+100);
+  y += 35;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  doc.text('Date: ______________________', marginX, y);
+
+  return doc;
+}
+
+function downloadAuditPack(periodId){
+  const doc = buildAuditPackPdf(periodId);
+  if(!doc) return;
+  const period = getPeriod(periodId);
+  doc.save(`${state.club.name.replace(/\s+/g,'_')}_Audit_Pack_FY${shortFYLabel(period.fiscalYear).replace('/','-')}.pdf`);
 }
 
 function buildDonorDocumentPdf(record){
