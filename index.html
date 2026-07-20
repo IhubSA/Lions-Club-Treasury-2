@@ -1425,10 +1425,10 @@ function renderDonations(){
 function ensureChargeDraft(){
   if(!state.ui.chargeDraft){
     state.ui.chargeDraft = {};
-    state.dues.forEach(m=>{ state.ui.chargeDraft[m.id] = { amount: MEMBERSHIP_RATES[m.type] ?? 0, include:false }; });
+    state.dues.forEach(m=>{ state.ui.chargeDraft[m.id] = { amount: 0, include:false }; });
   } else {
     // keep draft in sync if members were added/removed since it was created
-    state.dues.forEach(m=>{ if(!(m.id in state.ui.chargeDraft)) state.ui.chargeDraft[m.id] = { amount: MEMBERSHIP_RATES[m.type] ?? 0, include:false }; });
+    state.dues.forEach(m=>{ if(!(m.id in state.ui.chargeDraft)) state.ui.chargeDraft[m.id] = { amount: 0, include:false }; });
   }
 }
 
