@@ -1844,6 +1844,24 @@ function renderSettings(){
     resetArea.appendChild(confirmBox);
   };
   dangerCard.appendChild(resetArea);
+
+  const resetDuesBtn = el(`<button class="btn danger" style="margin-top:12px;">Reset all member balances to R0.00</button>`);
+  const resetDuesArea = el(`<div style="margin-top:12px;"></div>`);
+  resetDuesArea.appendChild(resetDuesBtn);
+  resetDuesBtn.onclick = ()=>{
+    const confirmBox = el(`<div class="confirm-box">
+      <span>This sets every member's balance owing back to R0.00 and clears their charge/payment history. Members themselves are not removed.</span>
+      <div class="actions"><button class="btn danger small">Yes, reset balances</button><button class="btn ghost small">Cancel</button></div>
+    </div>`);
+    const [yesBtn, cancelBtn] = confirmBox.querySelectorAll('button');
+    yesBtn.onclick = ()=>{
+      state.dues.forEach(m=>{ m.owing = 0; m.history = []; });
+      saveState(); showToast("All member balances reset to R0.00"); render();
+    };
+    cancelBtn.onclick = ()=> confirmBox.remove();
+    resetDuesArea.appendChild(confirmBox);
+  };
+  dangerCard.appendChild(resetDuesArea);
   wrap.appendChild(dangerCard);
 
   return wrap;
