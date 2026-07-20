@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
   :root{
     --ink:#132A46; --ink-soft:#3D5470;
@@ -687,11 +688,30 @@ function renderTabContent(){
 }
 
 /* ---- Dashboard ---- */
+let dashboardChartInstance = null;
+
+function dashboardChartSeries(period, account, category){
+  const months = fyMonthKeys(period.fiscalYear);
+  const income = [], expense = [];
+  months.forEach(mk=>{
+    let inc=0, exp=0;
+    period.transactions.forEach(t=>{
+      if(monthKey(t.date)!==mk) return;
+      if(account!=='All' && t.account!==account) return;
+      if(category!=='All' && t.type!==category) return;
+      inc += Number(t.income)||0; exp += Number(t.expense)||0;
+    });
+    income.push(Math.round(inc*100)/100); expense.push(Math.round(exp*100)/100);
+  });
+  return { labels: months.map(monthDisplay), income, expense };
+}
+
 function renderDashboard(){
   const period = getPeriod("current");
   const admin = accountTotalsFor(period,"Admin");
   const projects = accountTotalsFor(period,"Projects");
   const total = admin.balance + projects.balance;
+  const totalOwing = state.dues.reduce((s,d)=> s + Math.max(0, d.owing), 0);
 
   const wrap = el(`<div></div>`);
   const kpis = el(`<div class="grid kpi-grid"></div>`);
@@ -699,9 +719,65 @@ function renderDashboard(){
     ["Admin Account Balance", fmtMoney(admin.balance), `Opening ${fmtMoney(admin.opening)}`],
     ["Projects Account Balance", fmtMoney(projects.balance), `Opening ${fmtMoney(projects.opening)}`],
     ["Combined Balance", fmtMoney(total), "Admin + Projects"],
-    ["YTD Income / Expense", fmtMoney(admin.income+projects.income) + " / " + fmtMoney(admin.expense+projects.expense), "Across both accounts, this FY"]
+    ["YTD Income / Expense", fmtMoney(admin.income+projects.income) + " / " + fmtMoney(admin.expense+projects.expense), "Across both accounts, this FY"],
+    ["Owed by Members", fmtMoney(totalOwing), `Across ${state.dues.length} member(s)`]
   ].forEach(([label,val,sub])=> kpis.appendChild(el(`<div class="card kpi"><div class="kpi-label">${label}</div><div class="kpi-val num">${val}</div><div class="kpi-sub">${sub}</div></div>`)));
   wrap.appendChild(kpis);
+
+  state.ui.dashChartAccount = state.ui.dashChartAccount || "All";
+  state.ui.dashChartCategory = state.ui.dashChartCategory || "All";
+
+  const chartCard = el(`<div class="card" style="margin-bottom:16px;"></div>`);
+  chartCard.appendChild(el(`<div class="section-title">Income & Expenses Trend<div class="rule"></div></div>`));
+  const chartControls = el(`<div class="filters no-print" style="margin-bottom:16px;"></div>`);
+  const chartAccToggle = el(`<div class="toggle-group" style="width:260px;">
+    <button data-acc="All" class="${state.ui.dashChartAccount==='All'?'on admin':''}">All</button>
+    <button data-acc="Admin" class="${state.ui.dashChartAccount==='Admin'?'on admin':''}">Admin</button>
+    <button data-acc="Projects" class="${state.ui.dashChartAccount==='Projects'?'on projects':''}">Projects</button>
+  </div>`);
+  chartAccToggle.querySelectorAll('button').forEach(b=> b.onclick = ()=>{ state.ui.dashChartAccount = b.dataset.acc; render(); });
+  chartControls.appendChild(chartAccToggle);
+  const presentCats = [...new Set(period.transactions.map(t=>t.type))];
+  const chartCatOptions = [...new Set([...state.categories.filter(c=>presentCats.includes(c)), ...presentCats])];
+  const chartCatSel = el(`<select><option value="All">All categories</option>${chartCatOptions.map(c=>`<option ${c===state.ui.dashChartCategory?'selected':''}>${c}</option>`).join('')}</select>`);
+  chartCatSel.onchange = ()=>{ state.ui.dashChartCategory = chartCatSel.value; render(); };
+  chartControls.appendChild(chartCatSel);
+  chartCard.appendChild(chartControls);
+
+  if(period.transactions.length===0){
+    chartCard.appendChild(el(`<div class="empty"><div class="big">No transactions yet</div>Add ledger entries to see the trend here.</div>`));
+  } else {
+    const chartWrap = el(`<div style="height:300px; position:relative;"><canvas></canvas></div>`);
+    chartCard.appendChild(chartWrap);
+    const canvasEl = chartWrap.querySelector('canvas');
+    const series = dashboardChartSeries(period, state.ui.dashChartAccount, state.ui.dashChartCategory);
+    setTimeout(()=>{
+      if(dashboardChartInstance){ dashboardChartInstance.destroy(); dashboardChartInstance = null; }
+      if(!window.Chart || !canvasEl.isConnected) return;
+      dashboardChartInstance = new Chart(canvasEl.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: series.labels,
+          datasets: [
+            { label:'Income', data: series.income, backgroundColor:'#2F6F4F', borderRadius:3 },
+            { label:'Expense', data: series.expense, backgroundColor:'#9C3D3D', borderRadius:3 }
+          ]
+        },
+        options: {
+          responsive:true, maintainAspectRatio:false,
+          plugins:{
+            legend:{ position:'top', labels:{ font:{family:"Inter", size:12.5}, color:'#3D5470', boxWidth:12, usePointStyle:true, pointStyle:'circle' } },
+            tooltip:{ callbacks:{ label: (ctx)=> `${ctx.dataset.label}: ${fmtMoney(ctx.parsed.y)}` } }
+          },
+          scales:{
+            y:{ beginAtZero:true, ticks:{ color:'#3D5470', font:{family:"IBM Plex Mono", size:11}, callback:(v)=>'R'+v.toLocaleString() }, grid:{ color:'#E6DFC9' } },
+            x:{ ticks:{ color:'#3D5470', font:{family:"Inter", size:11.5} }, grid:{ display:false } }
+          }
+        }
+      });
+    }, 0);
+  }
+  wrap.appendChild(chartCard);
 
   const row = el(`<div class="grid" style="grid-template-columns:1.1fr .9fr;"></div>`);
   const recentCard = el(`<div class="card"></div>`);
