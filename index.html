@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root{
     --ink:#132A46; --ink-soft:#3D5470;
@@ -753,7 +753,11 @@ function renderDashboard(){
     const series = dashboardChartSeries(period, state.ui.dashChartAccount, state.ui.dashChartCategory);
     setTimeout(()=>{
       if(dashboardChartInstance){ dashboardChartInstance.destroy(); dashboardChartInstance = null; }
-      if(!window.Chart || !canvasEl.isConnected) return;
+      if(!canvasEl.isConnected) return;
+      if(!window.Chart){
+        chartWrap.innerHTML = '<div class="empty" style="padding-top:0;">Couldn\'t load the chart library — check your internet connection and refresh the page.</div>';
+        return;
+      }
       dashboardChartInstance = new Chart(canvasEl.getContext('2d'), {
         type: 'bar',
         data: {
