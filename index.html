@@ -1441,7 +1441,8 @@ function downloadMemberStatement(member){
 
 // Automatic send via the Supabase Edge Function + Resend (needs setup — see Settings).
 async function emailMemberStatement(member, triggerBtn){
-  if(!member.email){ showToast(`${member.name} has no email address on file`); return; }
+  const recipients = [member.email, ...(member.altEmails||[])].map(e=>(e||"").trim()).filter(Boolean);
+  if(recipients.length===0){ showToast(`${member.name} has no email address on file`); return; }
   if(!useSupabase || !sb){ showToast("Emailing needs this app connected to Supabase"); return; }
   const doc = buildMemberStatementPdf(member);
   if(!doc) return;
@@ -1452,7 +1453,7 @@ async function emailMemberStatement(member, triggerBtn){
   try{
     const { data, error } = await withTimeout(sb.functions.invoke('send-Statement', {
       body: {
-        to: member.email,
+        to: recipients,
         subject: `${state.club.name} — Dues Statement`,
         html: `<p>Hi ${member.name.split(' ')[0]},</p><p>Please find your latest dues statement from ${state.club.name} attached.</p><p>Current balance owing: <strong>${fmtMoney(member.owing)}</strong></p><p>Kind regards,<br>${state.club.name}</p>`,
         attachmentBase64: base64,
@@ -1460,7 +1461,7 @@ async function emailMemberStatement(member, triggerBtn){
       }
     }), 20000);
     if(error) throw error;
-    showToast(`Statement emailed to ${member.name}`);
+    showToast(`Statement emailed to ${member.name}${recipients.length>1?` (${recipients.length} addresses)`:''}`);
     return true;
   }catch(e){
     console.error("Email send failed:", e);
@@ -1472,7 +1473,7 @@ async function emailMemberStatement(member, triggerBtn){
 }
 
 async function emailAllMemberStatements(triggerBtn){
-  const recipients = state.dues.filter(d=> d.email && d.email.trim());
+  const recipients = state.dues.filter(d=> (d.email && d.email.trim()) || (d.altEmails && d.altEmails.length>0));
   if(recipients.length===0){ showToast("No members have an email address on file yet"); return; }
   const original = triggerBtn.textContent;
   triggerBtn.disabled = true;
@@ -2013,6 +2014,33 @@ function renderDues(){
         saveState(); showToast("Email saved"); render();
       };
       actionsCol.appendChild(emailForm);
+
+      const altEmails = d.altEmails || [];
+      if(altEmails.length>0){
+        const altList = el(`<div class="chip-wrap" style="margin-top:10px;"></div>`);
+        altEmails.forEach((addr, idx)=>{
+          const chip = el(`<span class="chip">${addr}<button title="Remove this email">✕</button></span>`);
+          chip.querySelector('button').onclick = ()=>{
+            d.altEmails = (d.altEmails||[]).filter((_,i)=>i!==idx);
+            saveState(); showToast("Email removed"); render();
+          };
+          altList.appendChild(chip);
+        });
+        actionsCol.appendChild(altList);
+      }
+      const addAltRow = el(`<div class="mini-form" style="margin-top:10px;"><input type="email" placeholder="Add another email address" style="flex:1;"><button class="btn ghost small">Add</button></div>`);
+      const [altInput, altBtn] = addAltRow.children;
+      altBtn.onclick = ()=>{
+        const val = altInput.value.trim();
+        if(!val){ showToast("Enter an email address first"); return; }
+        if(val===d.email || (d.altEmails||[]).includes(val)){ showToast("That email is already saved for this member"); return; }
+        d.altEmails = [...(d.altEmails||[]), val];
+        saveState(); showToast("Alternative email added"); render();
+      };
+      actionsCol.appendChild(addAltRow);
+      if(d.email || altEmails.length>0){
+        actionsCol.appendChild(el(`<p class="section-sub" style="margin-top:8px; margin-bottom:0;">Statements are emailed to all addresses saved here at once.</p>`));
+      }
 
       actionsCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:16px 0 8px;">Record payment</h3>`));
       const payForm = el(`<div class="mini-form"><input type="number" step="0.01" placeholder="Amount (R)" style="width:120px;"><input type="text" placeholder="Note (optional)"><button class="btn small">Save</button></div>`);
