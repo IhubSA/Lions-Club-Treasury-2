@@ -1387,6 +1387,7 @@ function buildMemberStatementPdf(member){
   y += 9;
   doc.setFontSize(10.5); doc.setFont('helvetica','normal');
   doc.text(`Member: ${member.name}`, marginX, y); y += 6;
+  if(member.memberNumber){ doc.text(`Member number: ${member.memberNumber}`, marginX, y); y += 6; }
   doc.text(`Membership type: ${member.type}`, marginX, y); y += 6;
   doc.text(`Statement date: ${fmtDate(new Date().toISOString().slice(0,10))}`, marginX, y); y += 12;
 
