@@ -1954,9 +1954,10 @@ function renderDues(){
   // Add member
   const addCard = el(`<div class="card no-print" style="margin-bottom:20px;"></div>`);
   addCard.appendChild(el(`<div class="section-title">Add member<div class="rule"></div></div>`));
-  const addForm = el(`<div class="form-grid" style="grid-template-columns:1.6fr 1.4fr 1.6fr auto;">
+  const addForm = el(`<div class="form-grid" style="grid-template-columns:1.4fr 1.2fr 1fr 1.4fr auto;">
     <div class="field"><label>Name</label><input type="text" id="d-name" placeholder="Full name"></div>
     <div class="field"><label>Membership type</label><select id="d-type">${Object.keys(MEMBERSHIP_RATES).map(t=>`<option>${t}</option>`).join('')}</select></div>
+    <div class="field"><label>Member # (optional)</label><input type="text" id="d-memberno" placeholder="e.g. 042"></div>
     <div class="field"><label>Email (optional)</label><input type="email" id="d-email" placeholder="name@example.com"></div>
     <button class="btn" id="d-add">Add member</button>
   </div>`);
@@ -1965,8 +1966,9 @@ function renderDues(){
     const name = addForm.querySelector('#d-name').value.trim();
     const type = addForm.querySelector('#d-type').value;
     const email = addForm.querySelector('#d-email').value.trim();
+    const memberNumber = addForm.querySelector('#d-memberno').value.trim();
     if(!name){ showToast("Enter a member name"); return; }
-    state.dues.push({ id: uid(), name, type, email, owing:0, history:[] });
+    state.dues.push({ id: uid(), name, type, email, memberNumber, owing:0, history:[] });
     saveState(); showToast("Member added — starting balance R0.00"); render();
   };
   wrap.appendChild(addCard);
@@ -1985,11 +1987,12 @@ function renderDues(){
   tableCard.appendChild(el(`<div class="section-title">Members<div class="rule"></div><button class="btn ghost small no-print" id="email-all-btn">Email all statements</button></div>`));
   tableCard.appendChild(el(`<p class="section-sub">Click a member to record a payment, add a one-off charge, edit their email, or view their history.</p>`));
   tableCard.querySelector('#email-all-btn').onclick = (e)=> emailAllMemberStatements(e.target);
-  const tbl = el(`<table><thead><tr><th>Member</th><th>Type</th><th class="right">Balance owing</th><th></th></tr></thead><tbody></tbody></table>`);
+  const tbl = el(`<table><thead><tr><th>Member #</th><th>Member</th><th>Type</th><th class="right">Balance owing</th><th></th></tr></thead><tbody></tbody></table>`);
   const tb = tbl.querySelector('tbody');
   [...state.dues].sort((a,b)=>a.name.localeCompare(b.name)).forEach(d=>{
     const open = state.ui.expandedMember === d.id;
     const tr = el(`<tr class="member-row">
+      <td class="muted num">${d.memberNumber||'—'}</td>
       <td>${d.name}</td>
       <td class="muted">${d.type}</td>
       <td class="right num ${d.owing>0?'neg':(d.owing<0?'pos':'')}">${fmtMoney(d.owing)}</td>
@@ -2002,11 +2005,20 @@ function renderDues(){
       const dtr = document.createElement('tr');
       dtr.className = "member-detail";
       const td = document.createElement('td');
-      td.colSpan = 4;
+      td.colSpan = 5;
       const inner = el(`<div class="member-detail-inner"></div>`);
 
       const actionsCol = el(`<div></div>`);
-      actionsCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:0 0 8px;">Email address</h3>`));
+      actionsCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:0 0 8px;">Member number</h3>`));
+      const memberNoForm = el(`<div class="mini-form"><input type="text" placeholder="e.g. 042" value="${d.memberNumber||''}" style="flex:1;"><button class="btn ghost small">Save</button></div>`);
+      const [memberNoInput, memberNoBtn] = memberNoForm.children;
+      memberNoBtn.onclick = ()=>{
+        d.memberNumber = memberNoInput.value.trim();
+        saveState(); showToast("Member number saved"); render();
+      };
+      actionsCol.appendChild(memberNoForm);
+
+      actionsCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:16px 0 8px;">Email address</h3>`));
       const emailForm = el(`<div class="mini-form"><input type="email" placeholder="name@example.com" value="${d.email||''}" style="flex:1;"><button class="btn ghost small">Save</button></div>`);
       const [emailInput, emailBtn] = emailForm.children;
       emailBtn.onclick = ()=>{
