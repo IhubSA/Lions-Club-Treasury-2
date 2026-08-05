@@ -1134,6 +1134,64 @@ function renderLedgerTable(holder, period){
 }
 
 /* ---- Reports ---- */
+function renderEmailReportPanel(container){
+  container.innerHTML = "";
+  if(!state.ui.emailReportPanelOpen) return;
+
+  state.ui.emailReportSelected = state.ui.emailReportSelected || new Set();
+  const eligible = state.dues.filter(m=> m.email || (m.altEmails && m.altEmails.length>0));
+
+  const card = el(`<div class="card no-print" style="margin-top:16px; margin-bottom:20px;"></div>`);
+  card.appendChild(el(`<div class="section-title">Email this report<div class="rule"></div></div>`));
+  card.appendChild(el(`<p class="section-sub">Sends the combined Admin + Projects PDF above as one attachment. Only members with an email address on file are listed.</p>`));
+
+  if(eligible.length===0){
+    card.appendChild(el(`<div class="empty">No members have an email address on file yet — add one in Member Dues first.</div>`));
+    container.appendChild(card);
+    return;
+  }
+
+  const btnRow = el(`<div style="display:flex; gap:10px; margin-bottom:14px;"></div>`);
+  const selectAllBtn = el(`<button class="btn ghost small">Select all</button>`);
+  const deselectAllBtn = el(`<button class="btn ghost small">Deselect all</button>`);
+  selectAllBtn.onclick = ()=>{ eligible.forEach(m=> state.ui.emailReportSelected.add(m.id)); renderEmailReportPanel(container); };
+  deselectAllBtn.onclick = ()=>{ state.ui.emailReportSelected.clear(); renderEmailReportPanel(container); };
+  btnRow.appendChild(selectAllBtn); btnRow.appendChild(deselectAllBtn);
+  card.appendChild(btnRow);
+
+  const listWrap = el(`<div class="grid" style="grid-template-columns:repeat(auto-fill, minmax(220px,1fr)); gap:8px; margin-bottom:16px;"></div>`);
+  eligible.sort((a,b)=>a.name.localeCompare(b.name)).forEach(m=>{
+    const checked = state.ui.emailReportSelected.has(m.id);
+    const row = el(`<label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:6px 8px; border:1px solid var(--card-border); border-radius:7px; cursor:pointer; background:${checked?'#F1EAD6':'transparent'};">
+      <input type="checkbox" style="width:auto;" ${checked?'checked':''}> ${m.name}
+    </label>`);
+    row.querySelector('input').onchange = (e)=>{
+      if(e.target.checked) state.ui.emailReportSelected.add(m.id); else state.ui.emailReportSelected.delete(m.id);
+      renderEmailReportPanel(container);
+    };
+    listWrap.appendChild(row);
+  });
+  card.appendChild(listWrap);
+
+  const sendRow = el(`<div style="display:flex; gap:10px; align-items:center;"></div>`);
+  const selectedCount = state.ui.emailReportSelected.size;
+  const sendBtn = el(`<button class="btn">${selectedCount>0?`Send to ${selectedCount} selected`:'Select at least one member'}</button>`);
+  sendBtn.disabled = selectedCount===0;
+  sendRow.appendChild(sendBtn);
+  const progressLabel = el(`<span class="muted" style="font-size:12.5px;"></span>`);
+  sendRow.appendChild(progressLabel);
+  sendBtn.onclick = async ()=>{
+    sendBtn.disabled = true;
+    const ids = [...state.ui.emailReportSelected];
+    await emailReportToMembers(ids, (i,total)=>{ progressLabel.textContent = `Sending ${i} of ${total}…`; });
+    progressLabel.textContent = "";
+    sendBtn.disabled = state.ui.emailReportSelected.size===0;
+  };
+  card.appendChild(sendRow);
+
+  container.appendChild(card);
+}
+
 function renderSignatureBlock(){
   const col = (label, name, sigKey)=> `<div class="sig-col">
     <div class="sig-image">${state.club[sigKey]?`<img src="${state.club[sigKey]}">`:''}</div>
@@ -1203,6 +1261,21 @@ function renderReports(){
     wrap.appendChild(el(`<div class="card"><div class="empty"><div class="big">No transactions for this period</div>Add ledger entries, or pick a different financial year above.</div></div>`));
     return wrap;
   }
+
+  const actionRow = el(`<div class="filters no-print" style="margin-top:-10px;"></div>`);
+  const downloadReportBtn = el(`<button class="btn ghost small">Download report (PDF)</button>`);
+  downloadReportBtn.onclick = ()=> downloadReportPdf();
+  const emailReportBtn = el(`<button class="btn ghost small">Email report to members</button>`);
+  actionRow.appendChild(downloadReportBtn); actionRow.appendChild(emailReportBtn);
+  wrap.appendChild(actionRow);
+
+  const emailPanel = el(`<div></div>`);
+  wrap.appendChild(emailPanel);
+  emailReportBtn.onclick = ()=>{
+    state.ui.emailReportPanelOpen = !state.ui.emailReportPanelOpen;
+    renderEmailReportPanel(emailPanel);
+  };
+  if(state.ui.emailReportPanelOpen){ renderEmailReportPanel(emailPanel); }
 
   if(state.ui.reportMode==="monthly"){
     const stmt = monthlyStatement(period, state.ui.reportAccount, state.ui.reportMonth);
@@ -1534,6 +1607,152 @@ function addPdfFooterDetails(doc, marginX, y, bankDetailsText){
   }
   doc.setTextColor(20,20,20);
   return y;
+}
+
+function buildReportPdf(){
+  if(!window.jspdf || !window.jspdf.jsPDF){ showToast("PDF library still loading — try again in a moment"); return null; }
+  const period = getPeriod(state.ui.reportPeriod || "current");
+  const mode = state.ui.reportMode || "monthly";
+  const includeSig = !!state.ui.reportShowSignatures;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const marginX = 15, rightX = 195;
+  let y = 20;
+  const mny = (n)=> fmtMoney(n).replace('R ','');
+
+  function drawRunningHeader(){
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90,100,115);
+    const periodLabel = mode==='monthly' ? monthDisplay(state.ui.reportMonth) : `FY ${shortFYLabel(period.fiscalYear)}`;
+    doc.text(`${state.club.name} — ${periodLabel}`, marginX, 12);
+    doc.setDrawColor(200,154,62); doc.setLineWidth(0.4); doc.line(marginX, 15, rightX, 15);
+    doc.setTextColor(20,20,20);
+  }
+  function checkBreak(){
+    if(y > 272){ doc.addPage(); y = 20; drawRunningHeader(); doc.setFont('helvetica','normal'); doc.setFontSize(10.5); }
+  }
+  function drawSig(label, name, sigImg, x){
+    if(sigImg){ try{ doc.addImage(sigImg, 'PNG', x, y-16, 34, 13); }catch(e){} }
+    doc.setDrawColor(20,20,20); doc.setLineWidth(0.3); doc.line(x, y, x+78, y);
+    doc.setFont('helvetica','bold'); doc.setFontSize(9);
+    doc.text(name||'', x, y+6);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(90,100,115);
+    doc.text(label, x, y+11);
+    doc.setTextColor(20,20,20);
+  }
+
+  function renderAccountSection(account, isFirst){
+    if(!isFirst){ doc.addPage(); y = 20; }
+    drawRunningHeader();
+    doc.setFont('helvetica','bold'); doc.setFontSize(14);
+    const title = mode==='monthly'
+      ? `${account} Account — ${monthDisplay(state.ui.reportMonth)}`
+      : `${account} Account — ${state.ui.reportCategory} — FY ${shortFYLabel(period.fiscalYear)}`;
+    doc.text(title, marginX, y); y += 10;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10.5);
+
+    if(mode==='monthly'){
+      const stmt = monthlyStatement(period, account, state.ui.reportMonth);
+      const openingCF = balanceCarriedForwardBefore(period, account, state.ui.reportMonth);
+      const closingCF = openingCF + stmt.totalIncome - stmt.totalExpense;
+      const c1=marginX, a1=95, c2=105, a2=rightX;
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+      doc.text('Income', c1, y); doc.text('Expenses', c2, y);
+      y += 2.5; doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y); y += 6.5;
+      doc.setFont('helvetica','normal');
+      stmt.rows.forEach(r=>{
+        checkBreak();
+        doc.text(r.cat.slice(0,26), c1, y); doc.text(r.income? mny(r.income):'–', a1, y, {align:'right'});
+        doc.text(r.cat.slice(0,26), c2, y); doc.text(r.expense? mny(r.expense):'–', a2, y, {align:'right'});
+        y += 6.5;
+      });
+      y += 2; doc.setDrawColor(19,42,70); doc.setLineWidth(0.4); doc.line(marginX, y, rightX, y); y += 7;
+      doc.setFont('helvetica','bold');
+      doc.text('Total income', c1, y); doc.text(mny(stmt.totalIncome), a1, y, {align:'right'});
+      doc.text('Total expenses', c2, y); doc.text(mny(stmt.totalExpense), a2, y, {align:'right'});
+      y += 14;
+      doc.setFont('helvetica','normal'); doc.setFontSize(10);
+      doc.text(`Balance brought forward: ${mny(openingCF)}`, marginX, y); y += 6;
+      doc.text(`Net movement this month: ${mny(stmt.totalIncome-stmt.totalExpense)}`, marginX, y); y += 6;
+      doc.setFont('helvetica','bold');
+      doc.text(`Balance carried forward: ${mny(closingCF)}`, marginX, y); y += 6;
+
+      if(includeSig){
+        y += 18;
+        checkBreak();
+        drawSig('President', state.club.presidentName, state.club.presidentSignature, marginX);
+        drawSig('Treasurer', state.club.treasurerName, state.club.treasurerSignature, marginX+95);
+      }
+    } else {
+      const rep = categoryReport(period, account, state.ui.reportCategory);
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+      doc.text('Month', marginX, y); doc.text('Income', 120, y, {align:'right'}); doc.text('Expense', 155, y, {align:'right'}); doc.text('Net', rightX, y, {align:'right'});
+      y += 2.5; doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y); y += 6.5;
+      doc.setFont('helvetica','normal');
+      rep.rows.forEach(r=>{
+        checkBreak();
+        doc.text(monthDisplay(r.month), marginX, y);
+        doc.text(r.income? mny(r.income):'–', 120, y, {align:'right'});
+        doc.text(r.expense? mny(r.expense):'–', 155, y, {align:'right'});
+        doc.text(mny(r.income-r.expense), rightX, y, {align:'right'});
+        y += 6.5;
+      });
+      y += 2; doc.setDrawColor(19,42,70); doc.setLineWidth(0.4); doc.line(marginX, y, rightX, y); y += 7;
+      doc.setFont('helvetica','bold');
+      doc.text('Total', marginX, y);
+      doc.text(mny(rep.totalIncome), 120, y, {align:'right'});
+      doc.text(mny(rep.totalExpense), 155, y, {align:'right'});
+      doc.text(mny(rep.totalIncome-rep.totalExpense), rightX, y, {align:'right'});
+    }
+  }
+
+  renderAccountSection('Admin', true);
+  renderAccountSection('Projects', false);
+
+  return doc;
+}
+
+function downloadReportPdf(){
+  const doc = buildReportPdf();
+  if(!doc) return;
+  const period = getPeriod(state.ui.reportPeriod || "current");
+  const label = state.ui.reportMode==='monthly' ? monthDisplay(state.ui.reportMonth) : `${state.ui.reportCategory}_FY${shortFYLabel(period.fiscalYear)}`;
+  doc.save(`${state.club.name.replace(/\s+/g,'_')}_Report_${label.replace(/\s+/g,'_')}.pdf`);
+}
+
+async function emailReportToMembers(memberIds, onProgress){
+  if(!useSupabase || !sb){ showToast("Emailing needs this app connected to Supabase"); return; }
+  const doc = buildReportPdf();
+  if(!doc) return;
+  const period = getPeriod(state.ui.reportPeriod || "current");
+  const label = state.ui.reportMode==='monthly' ? monthDisplay(state.ui.reportMonth) : `${state.ui.reportCategory} — FY ${shortFYLabel(period.fiscalYear)}`;
+  const fileName = `${state.club.name.replace(/\s+/g,'_')}_Report_${label.replace(/[\s—]+/g,'_')}.pdf`;
+  const base64 = doc.output('datauristring').split(',')[1];
+  const members = state.dues.filter(m=> memberIds.includes(m.id));
+  let sent = 0, failed = 0;
+  for(let i=0;i<members.length;i++){
+    const m = members[i];
+    if(onProgress) onProgress(i+1, members.length);
+    const recipients = [m.email, ...(m.altEmails||[])].map(e=>(e||"").trim()).filter(Boolean);
+    if(recipients.length===0){ failed++; continue; }
+    try{
+      const { error } = await withTimeout(sb.functions.invoke('send-Statement', {
+        body: {
+          to: recipients,
+          subject: `${state.club.name} — ${label}`,
+          html: `<p>Hi ${m.name.split(' ')[0]},</p><p>Please find attached the ${state.club.name} financial report for <strong>${label}</strong>, covering both the Admin and Projects accounts.</p><p>Kind regards,<br>${state.club.name}</p>`,
+          attachmentBase64: base64,
+          attachmentName: fileName
+        }
+      }), 20000);
+      if(error) throw error;
+      sent++;
+    }catch(e){
+      console.error("Report email failed for", m.name, e);
+      failed++;
+    }
+    await new Promise(r=> setTimeout(r, 400));
+  }
+  showToast(`Report sent to ${sent} member(s)${failed?`, ${failed} failed or had no email`:''}`);
 }
 
 function buildAuditPackPdf(periodId){
