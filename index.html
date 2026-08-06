@@ -268,15 +268,18 @@ function defaultFY(){
 }
 
 let authSession = null;
+let currentClubId = null;
+let currentClubName = null;
+let clubsList = null; // cached list of {id,name} for the login dropdown
 let state = {
-  club: { name: "Fish Hoek Lions Club", logo: null, bankDetailsAdmin: "", bankDetailsProjects: "", treasurerName: "", treasurerEmail: "",
+  club: { name: "My Lions Club", logo: null, bankDetailsAdmin: "", bankDetailsProjects: "", treasurerName: "", treasurerEmail: "",
     address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null },
   security: { adminPassword: "" },
   fiscalYear: defaultFY(),
-  openingBalances: { Admin: 8850.92, Projects: 88744.04 },
+  openingBalances: { Admin: 0, Projects: 0 },
   transactions: [],
   categories: [...DEFAULT_CATEGORIES],
-  dues: MEMBER_NAMES.map(([name,type],i)=>({ id:"d"+i, name, type, owing:0, history:[] })),
+  dues: [],
   closedYears: [],
   donorDocuments: [],
   tab: "dashboard",
@@ -377,6 +380,40 @@ function withTimeout(promise, ms){
   ]);
 }
 
+async function fetchClubsList(){
+  if(clubsList) return clubsList;
+  if(!useSupabase || !sb) return [];
+  try{
+    const { data, error } = await withTimeout(sb.from('clubs').select('id,name').order('name'), 8000);
+    if(error) throw error;
+    clubsList = data || [];
+    return clubsList;
+  }catch(e){
+    console.error("Couldn't load club list:", e);
+    return [];
+  }
+}
+
+// Looks up which club a signed-in user belongs to. Returns the club id,
+// or null if this user isn't linked to any club yet.
+async function resolveClubMembership(userId){
+  if(!useSupabase || !sb) return null;
+  try{
+    const { data, error } = await withTimeout(
+      sb.from('club_members').select('club_id, clubs(name)').eq('user_id', userId).maybeSingle(),
+      8000
+    );
+    if(error) throw error;
+    if(!data) return null;
+    currentClubId = data.club_id;
+    currentClubName = data.clubs?.name || null;
+    return currentClubId;
+  }catch(e){
+    console.error("Couldn't resolve club membership:", e);
+    return null;
+  }
+}
+
 async function uploadAttachment(file){
   if(!useSupabase || !sb){ showToast("Attachments need this app connected to Supabase"); return null; }
   if(file.size > 10*1024*1024){ showToast("File is too large — please keep attachments under 10MB"); return null; }
@@ -402,10 +439,9 @@ async function deleteAttachment(path){
 async function loadState(){
   try{
     if(useSupabase && sb){
-      const { data, error } = await withTimeout(
-        sb.from('kv_store').select('value').eq('key', STORAGE_KEY).maybeSingle(),
-        10000
-      );
+      let query = sb.from('kv_store').select('value').eq('key', STORAGE_KEY);
+      query = currentClubId ? query.eq('club_id', currentClubId) : query;
+      const { data, error } = await withTimeout(query.maybeSingle(), 10000);
       if(error) throw error;
       if(data && data.value){
         state = Object.assign(state, data.value, {
@@ -450,10 +486,9 @@ async function saveState(){
   };
   try{
     if(useSupabase && sb){
-      const { error } = await withTimeout(
-        sb.from('kv_store').upsert({ key: STORAGE_KEY, value: payload, updated_at: new Date().toISOString() }),
-        10000
-      );
+      const row = { key: STORAGE_KEY, value: payload, updated_at: new Date().toISOString() };
+      if(currentClubId) row.club_id = currentClubId;
+      const { error } = await withTimeout(sb.from('kv_store').upsert(row), 10000);
       if(error) throw error;
     } else if(window.storage){
       await window.storage.set(STORAGE_KEY, JSON.stringify(payload), false);
@@ -585,17 +620,18 @@ function render(){
 }
 
 function renderLoginScreen(){
-  document.title = state.club.name + " — Sign in";
+  document.title = "Lions Treasury Book — Sign in";
   const app = document.getElementById('app');
   app.innerHTML = "";
   app.appendChild(el(`<div id="lion-watermark">${buildLionWatermarkImg()}</div>`));
   const wrap = el(`<div style="min-height:100vh; width:100%; display:flex; align-items:center; justify-content:center; position:relative; z-index:1;">
     <div class="card" style="width:340px;">
       <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:22px;">
-        <div class="crest" style="width:52px;height:52px;">${state.club.logo?`<img src="${state.club.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`:clubInitials(state.club.name)}</div>
-        <h1 style="font-size:19px; margin:0; text-align:center;">${state.club.name}</h1>
-        <p class="muted" style="font-size:12.5px; margin:0;">Treasury Book — sign in to continue</p>
+        <div class="crest" style="width:52px;height:52px;">LC</div>
+        <h1 style="font-size:19px; margin:0; text-align:center;">Lions Treasury Book</h1>
+        <p class="muted" style="font-size:12.5px; margin:0;">Select your club, then sign in</p>
       </div>
+      <div class="field" style="margin-bottom:12px;"><label>Club</label><select id="login-club"><option value="">Loading clubs…</option></select></div>
       <div class="field" style="margin-bottom:12px;"><label>Email</label><input type="email" id="login-email" autocomplete="username"></div>
       <div class="field" style="margin-bottom:8px;"><label>Password</label><input type="password" id="login-password" autocomplete="current-password"></div>
       <div id="login-error" style="color:var(--expense); font-size:12.5px; min-height:16px; margin-bottom:8px;"></div>
@@ -605,20 +641,46 @@ function renderLoginScreen(){
   </div>`);
   app.appendChild(wrap);
 
+  const clubSelect = wrap.querySelector('#login-club');
   const emailInput = wrap.querySelector('#login-email');
   const passwordInput = wrap.querySelector('#login-password');
   const errBox = wrap.querySelector('#login-error');
   const btn = wrap.querySelector('#login-btn');
 
+  fetchClubsList().then(list=>{
+    if(!clubSelect.isConnected) return;
+    if(list.length===0){
+      clubSelect.innerHTML = `<option value="">No clubs set up yet</option>`;
+      return;
+    }
+    clubSelect.innerHTML = `<option value="">Select your club…</option>` + list.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  });
+
   const doLogin = async ()=>{
+    const clubId = clubSelect.value;
     const email = emailInput.value.trim();
     const password = passwordInput.value;
     errBox.textContent = "";
+    if(!clubId){ errBox.textContent = "Please select your club."; return; }
     if(!email || !password){ errBox.textContent = "Enter your email and password."; return; }
     btn.disabled = true; btn.textContent = "Signing in…";
     try{
       const { data, error } = await withTimeout(sb.auth.signInWithPassword({ email, password }), 10000);
       if(error) throw error;
+      const membershipClubId = await resolveClubMembership(data.user.id);
+      if(!membershipClubId){
+        await sb.auth.signOut();
+        errBox.textContent = "This account isn't linked to any club yet. Contact your treasurer.";
+        btn.disabled = false; btn.textContent = "Sign in";
+        return;
+      }
+      if(membershipClubId !== clubId){
+        await sb.auth.signOut();
+        currentClubId = null; currentClubName = null;
+        errBox.textContent = "Your account isn't linked to that club — check you selected the right one.";
+        btn.disabled = false; btn.textContent = "Sign in";
+        return;
+      }
       authSession = data.session;
       await loadState();
       render();
@@ -668,7 +730,21 @@ function renderSidebar(){
     signOutBtn.onclick = async ()=>{
       try{ await sb.auth.signOut(); }catch(e){ console.error("Sign out failed:", e); }
       authSession = null;
-      state.tab = "dashboard"; state.ui = {};
+      currentClubId = null; currentClubName = null;
+      state = {
+        club: { name: "My Lions Club", logo: null, bankDetailsAdmin: "", bankDetailsProjects: "", treasurerName: "", treasurerEmail: "",
+          address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null },
+        security: { adminPassword: "" },
+        fiscalYear: defaultFY(),
+        openingBalances: { Admin: 0, Projects: 0 },
+        transactions: [],
+        categories: [...DEFAULT_CATEGORIES],
+        dues: [],
+        closedYears: [],
+        donorDocuments: [],
+        tab: "dashboard",
+        ui: {}
+      };
       render();
     };
   }
@@ -2652,12 +2728,17 @@ function renderSettings(){
     try{
       const { data } = await withTimeout(sb.auth.getSession(), 8000);
       authSession = data?.session || null;
+      if(authSession){ await resolveClubMembership(authSession.user.id); }
     }catch(e){ console.error("Couldn't check login status:", e); }
     sb.auth.onAuthStateChange((_event, session)=>{
       const wasSignedIn = !!authSession;
       authSession = session;
-      if(!wasSignedIn && session){ loadState().then(render); }
-      else if(wasSignedIn && !session){ render(); }
+      if(!wasSignedIn && session){
+        resolveClubMembership(session.user.id).then(()=> loadState().then(render));
+      } else if(wasSignedIn && !session){
+        currentClubId = null; currentClubName = null;
+        render();
+      }
     });
   }
   if(!useSupabase || authSession){
