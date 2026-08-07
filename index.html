@@ -1604,6 +1604,7 @@ async function emailMemberStatement(member, triggerBtn){
     const { data, error } = await withTimeout(sb.functions.invoke('send-Statement', {
       body: {
         to: recipients,
+        fromName: state.club.name,
         subject: `${state.club.name} — Dues Statement`,
         html: `<p>Hi ${member.name.split(' ')[0]},</p><p>Please find your latest dues statement from ${state.club.name} attached.</p><p>Current balance owing: <strong>${fmtMoney(member.owing)}</strong></p><p>Kind regards,<br>${state.club.name}</p>`,
         attachmentBase64: base64,
@@ -1814,6 +1815,7 @@ async function emailReportToMembers(memberIds, onProgress){
       const { error } = await withTimeout(sb.functions.invoke('send-Statement', {
         body: {
           to: recipients,
+          fromName: state.club.name,
           subject: `${state.club.name} — ${label}`,
           html: `<p>Hi ${m.name.split(' ')[0]},</p><p>Please find attached the ${state.club.name} financial report for <strong>${label}</strong>, covering both the Admin and Projects accounts.</p><p>Kind regards,<br>${state.club.name}</p>`,
           attachmentBase64: base64,
