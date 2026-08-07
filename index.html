@@ -416,10 +416,11 @@ async function resolveClubMembership(userId){
 
 async function uploadAttachment(file){
   if(!useSupabase || !sb){ showToast("Attachments need this app connected to Supabase"); return null; }
+  if(!currentClubId){ showToast("Couldn't identify your club — try refreshing the page"); return null; }
   if(file.size > 10*1024*1024){ showToast("File is too large — please keep attachments under 10MB"); return null; }
   try{
     const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g,'_');
-    const path = `${Date.now()}_${safeName}`;
+    const path = `${currentClubId}/${Date.now()}_${safeName}`;
     const { error } = await withTimeout(sb.storage.from('receipts').upload(path, file), 20000);
     if(error) throw error;
     const { data } = sb.storage.from('receipts').getPublicUrl(path);
