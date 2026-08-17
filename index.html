@@ -273,7 +273,7 @@ let currentClubName = null;
 let clubsList = null; // cached list of {id,name} for the login dropdown
 let state = {
   club: { name: "My Lions Club", logo: null, bankDetailsAdmin: "", bankDetailsProjects: "", treasurerName: "", treasurerEmail: "",
-    address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null },
+    address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null, secretaryName: "", secretarySignature: null },
   security: { adminPassword: "" },
   fiscalYear: defaultFY(),
   openingBalances: { Admin: 0, Projects: 0 },
@@ -282,6 +282,7 @@ let state = {
   dues: [],
   closedYears: [],
   donorDocuments: [],
+  meetings: [],
   tab: "dashboard",
   ui: {}
 };
@@ -423,12 +424,26 @@ async function uploadAttachment(file){
     const path = `${currentClubId}/${Date.now()}_${safeName}`;
     const { error } = await withTimeout(sb.storage.from('receipts').upload(path, file), 20000);
     if(error) throw error;
-    const { data } = sb.storage.from('receipts').getPublicUrl(path);
-    return { url: data.publicUrl, path, name: file.name };
+    return { path, name: file.name };
   }catch(e){
     console.error("Attachment upload failed:", e);
     showToast("Couldn't upload attachment — transaction saved without it");
     return null;
+  }
+}
+async function viewAttachment(path, triggerEl){
+  if(!useSupabase || !sb || !path) return;
+  const original = triggerEl ? triggerEl.textContent : null;
+  if(triggerEl) triggerEl.textContent = "…";
+  try{
+    const { data, error } = await withTimeout(sb.storage.from('receipts').createSignedUrl(path, 120), 10000);
+    if(error) throw error;
+    window.open(data.signedUrl, '_blank', 'noopener');
+  }catch(e){
+    console.error("Couldn't open attachment:", e);
+    showToast("Couldn't open attachment — it may have been moved or removed");
+  }finally{
+    if(triggerEl) triggerEl.textContent = original;
   }
 }
 async function deleteAttachment(path){
@@ -483,7 +498,8 @@ async function saveState(){
     categories: state.categories,
     dues: state.dues,
     closedYears: state.closedYears,
-    donorDocuments: state.donorDocuments
+    donorDocuments: state.donorDocuments,
+    meetings: state.meetings
   };
   try{
     if(useSupabase && sb){
@@ -704,6 +720,7 @@ function renderSidebar(){
     ["balance-sheet","▦","Balance Sheet"],
     ["dues","♦","Member Dues"],
     ["donations","🧾","Invoices & Receipts"],
+    ["meetings","🗓","Meetings"],
     ["settings","⚙","Settings"]
   ];
   const wrap = el(`<div class="sidebar">
@@ -734,7 +751,7 @@ function renderSidebar(){
       currentClubId = null; currentClubName = null;
       state = {
         club: { name: "My Lions Club", logo: null, bankDetailsAdmin: "", bankDetailsProjects: "", treasurerName: "", treasurerEmail: "",
-          address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null },
+          address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null, secretaryName: "", secretarySignature: null },
         security: { adminPassword: "" },
         fiscalYear: defaultFY(),
         openingBalances: { Admin: 0, Projects: 0 },
@@ -743,6 +760,7 @@ function renderSidebar(){
         dues: [],
         closedYears: [],
         donorDocuments: [],
+        meetings: [],
         tab: "dashboard",
         ui: {}
       };
@@ -760,6 +778,7 @@ function renderPageHead(){
     "balance-sheet":["Balance Sheet","Opening and closing position, and closing off the year."],
     dues:["Member Dues","Charge annual dues and track what's still owing."],
     donations:["Invoices & Receipts","Generate a simple invoice or receipt for a donor."],
+    meetings:["Meetings","Send invites with an agenda, then capture and share the minutes."],
     settings:["Settings","Fiscal year dates and data management."]
   };
   const [t,sub] = titles[state.tab];
@@ -786,6 +805,7 @@ function renderTabContent(){
   if(state.tab==="balance-sheet") return renderBalanceSheet();
   if(state.tab==="dues") return renderDues();
   if(state.tab==="donations") return renderDonations();
+  if(state.tab==="meetings") return renderMeetings();
   if(state.tab==="settings") return renderSettings();
 }
 
@@ -1064,9 +1084,9 @@ function renderLedgerTable(holder, period){
       <td class="right num pos">${t.income? fmtMoney(t.income):""}</td>
       <td class="right num neg">${t.expense? fmtMoney(t.expense):""}</td>
       <td class="right" style="white-space:nowrap;">
-        ${t.attachment?.url?`<a href="${t.attachment.url}" target="_blank" rel="noopener" title="View ${t.attachment.name||'attachment'}" style="margin-right:6px;">📎</a>`:""}
+        ${t.attachment?.path?`<button class="btn ghost small no-print" data-act="view-attachment" title="View ${t.attachment.name||'attachment'}" style="margin-right:6px;">📎</button>`:""}
         ${period.closed?"":`<span class="no-print">
-          <button class="btn ghost small" data-act="attach">${t.attachment?.url?'Replace':'Attach'}</button>
+          <button class="btn ghost small" data-act="attach">${t.attachment?.path?'Replace':'Attach'}</button>
           <input type="file" accept="image/*,.pdf" style="display:none;">
         </span>`}
       </td>
@@ -1075,6 +1095,8 @@ function renderLedgerTable(holder, period){
         <button class="btn ghost small" data-act="delete">Delete</button>
       </td>`}
     </tr>`);
+    const viewAttBtn = tr.querySelector('[data-act=view-attachment]');
+    if(viewAttBtn){ viewAttBtn.onclick = ()=> viewAttachment(t.attachment.path, viewAttBtn); }
     if(!period.closed){
       const fileInput = tr.querySelector('input[type=file]');
       tr.querySelector('[data-act=attach]').onclick = ()=> fileInput.click();
@@ -1834,6 +1856,153 @@ async function emailReportToMembers(memberIds, onProgress){
   showToast(`Report sent to ${sent} member(s)${failed?`, ${failed} failed or had no email`:''}`);
 }
 
+function buildMeetingInvitePdf(meeting){
+  if(!window.jspdf || !window.jspdf.jsPDF){ showToast("PDF library still loading — try again in a moment"); return null; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const marginX = 15, rightX = 195;
+  let y = 20;
+  const textStartX = state.club.logo ? marginX + 24 : marginX;
+
+  if(state.club.logo){ try{ doc.addImage(state.club.logo, 'PNG', marginX, y-9, 18, 18); }catch(e){} }
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(20,42,70);
+  doc.text(state.club.name, textStartX, y);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,100,115);
+  doc.text('Meeting Invitation', textStartX, y+6);
+  doc.setTextColor(20,20,20);
+
+  y += 20;
+  doc.setDrawColor(200,154,62); doc.setLineWidth(0.6); doc.line(marginX, y, rightX, y);
+  y += 10;
+
+  doc.setFontSize(14); doc.setFont('helvetica','bold');
+  doc.text(meeting.title || 'Club Meeting', marginX, y); y += 9;
+  doc.setFontSize(10.5); doc.setFont('helvetica','normal');
+  doc.text(`Date: ${fmtDate(meeting.date)}${meeting.time?`  •  Time: ${meeting.time}`:''}`, marginX, y); y += 6;
+  if(meeting.location){ doc.text(`Location: ${meeting.location}`, marginX, y); y += 6; }
+  y += 6;
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(20,42,70);
+  doc.text('Agenda', marginX, y); y += 3;
+  doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y); y += 8;
+  doc.setTextColor(20,20,20); doc.setFont('helvetica','normal'); doc.setFontSize(10.5);
+  const agendaItems = (meeting.agenda||'').split('\n').map(l=>l.trim()).filter(Boolean);
+  if(agendaItems.length===0){
+    doc.setTextColor(120); doc.text('No agenda items added.', marginX, y); doc.setTextColor(20,20,20); y += 7;
+  } else {
+    agendaItems.forEach((item, i)=>{
+      const lines = doc.splitTextToSize(`${i+1}. ${item}`, rightX-marginX-4);
+      lines.forEach(line=>{
+        if(y > 280){ doc.addPage(); y = 20; }
+        doc.text(line, marginX, y); y += 6.5;
+      });
+    });
+  }
+
+  y = addPdfFooterDetails(doc, marginX, y, "");
+  return doc;
+}
+
+function buildMeetingMinutesPdf(meeting){
+  if(!window.jspdf || !window.jspdf.jsPDF){ showToast("PDF library still loading — try again in a moment"); return null; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const marginX = 15, rightX = 195;
+  let y = 20;
+  const textStartX = state.club.logo ? marginX + 24 : marginX;
+
+  function checkBreak(){ if(y > 275){ doc.addPage(); y = 20; } }
+
+  if(state.club.logo){ try{ doc.addImage(state.club.logo, 'PNG', marginX, y-9, 18, 18); }catch(e){} }
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(20,42,70);
+  doc.text(state.club.name, textStartX, y);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,100,115);
+  doc.text('Meeting Minutes', textStartX, y+6);
+  doc.setTextColor(20,20,20);
+
+  y += 20;
+  doc.setDrawColor(200,154,62); doc.setLineWidth(0.6); doc.line(marginX, y, rightX, y);
+  y += 10;
+
+  doc.setFontSize(14); doc.setFont('helvetica','bold');
+  doc.text(meeting.title || 'Club Meeting', marginX, y); y += 9;
+  doc.setFontSize(10.5); doc.setFont('helvetica','normal');
+  doc.text(`Date: ${fmtDate(meeting.date)}${meeting.time?`  •  Time: ${meeting.time}`:''}`, marginX, y); y += 6;
+  if(meeting.location){ doc.text(`Location: ${meeting.location}`, marginX, y); y += 6; }
+  if(meeting.attendees && meeting.attendees.trim()){
+    const attLines = doc.splitTextToSize(`Attendees: ${meeting.attendees.trim()}`, rightX-marginX);
+    attLines.forEach(line=>{ checkBreak(); doc.text(line, marginX, y); y += 6; });
+  }
+  y += 6;
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(20,42,70);
+  doc.text('Minutes', marginX, y); y += 3;
+  doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y); y += 8;
+  doc.setTextColor(20,20,20); doc.setFont('helvetica','normal'); doc.setFontSize(10.5);
+  const minutesText = (meeting.minutes||'').trim();
+  if(!minutesText){
+    doc.setTextColor(120); doc.text('No minutes recorded yet.', marginX, y); doc.setTextColor(20,20,20); y += 7;
+  } else {
+    minutesText.split('\n').forEach(paragraph=>{
+      if(paragraph.trim()===''){ y += 4; return; }
+      const lines = doc.splitTextToSize(paragraph, rightX-marginX);
+      lines.forEach(line=>{ checkBreak(); doc.text(line, marginX, y); y += 6.5; });
+    });
+  }
+
+  y += 20;
+  checkBreak();
+  function drawSig(label, name, sigImg, x){
+    if(sigImg){ try{ doc.addImage(sigImg, 'PNG', x, y-16, 36, 14); }catch(e){} }
+    doc.setDrawColor(20,20,20); doc.setLineWidth(0.3); doc.line(x, y, x+80, y);
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+    doc.text(name||'', x, y+6);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(90,100,115);
+    doc.text(label, x, y+11);
+    doc.setTextColor(20,20,20);
+  }
+  drawSig('President', state.club.presidentName, state.club.presidentSignature, marginX);
+  drawSig('Secretary', state.club.secretaryName, state.club.secretarySignature, marginX+100);
+
+  return doc;
+}
+
+async function sendMeetingEmail(kind, meeting, memberIds, onProgress){
+  if(!useSupabase || !sb){ showToast("Emailing needs this app connected to Supabase"); return; }
+  const doc = kind==='invite' ? buildMeetingInvitePdf(meeting) : buildMeetingMinutesPdf(meeting);
+  if(!doc) return;
+  const base64 = doc.output('datauristring').split(',')[1];
+  const fileName = `${state.club.name.replace(/\s+/g,'_')}_${kind==='invite'?'Meeting_Invite':'Meeting_Minutes'}_${(meeting.title||'meeting').replace(/\s+/g,'_')}.pdf`;
+  const members = state.dues.filter(m=> memberIds.includes(m.id));
+  let sent = 0, failed = 0;
+  const subject = kind==='invite'
+    ? `${state.club.name} — Meeting Invitation: ${meeting.title||''}`
+    : `${state.club.name} — Meeting Minutes: ${meeting.title||''}`;
+  for(let i=0;i<members.length;i++){
+    const m = members[i];
+    if(onProgress) onProgress(i+1, members.length);
+    const recipients = [m.email, ...(m.altEmails||[])].map(e=>(e||"").trim()).filter(Boolean);
+    if(recipients.length===0){ failed++; continue; }
+    const html = kind==='invite'
+      ? `<p>Hi ${m.name.split(' ')[0]},</p><p>You're invited to <strong>${meeting.title||'a club meeting'}</strong> on ${fmtDate(meeting.date)}${meeting.time?` at ${meeting.time}`:''}${meeting.location?`, ${meeting.location}`:''}. The agenda is attached.</p><p>Kind regards,<br>${state.club.name}</p>`
+      : `<p>Hi ${m.name.split(' ')[0]},</p><p>Please find attached the minutes from <strong>${meeting.title||'the club meeting'}</strong> held on ${fmtDate(meeting.date)}.</p><p>Kind regards,<br>${state.club.name}</p>`;
+    try{
+      const { error } = await withTimeout(sb.functions.invoke('send-Statement', {
+        body: { to: recipients, fromName: state.club.name, subject, html, attachmentBase64: base64, attachmentName: fileName }
+      }), 20000);
+      if(error) throw error;
+      sent++;
+    }catch(e){
+      console.error(`Meeting ${kind} email failed for`, m.name, e);
+      failed++;
+    }
+    await new Promise(r=> setTimeout(r, 400));
+  }
+  showToast(`${kind==='invite'?'Invite':'Minutes'} sent to ${sent} member(s)${failed?`, ${failed} failed or had no email`:''}`);
+  meeting[kind==='invite' ? 'inviteSentAt' : 'minutesSentAt'] = new Date().toISOString();
+  saveState();
+}
+
 function buildAuditPackPdf(periodId){
   if(!window.jspdf || !window.jspdf.jsPDF){ showToast("PDF library still loading — try again in a moment"); return null; }
   const period = getPeriod(periodId);
@@ -2181,6 +2350,192 @@ function renderDonations(){
     histCard.appendChild(tbl);
   }
   wrap.appendChild(histCard);
+  return wrap;
+}
+
+function renderMeetingRecipientPicker(container, meeting, kind, sendBtn){
+  container.innerHTML = "";
+  state.ui.meetingRecipients = state.ui.meetingRecipients || {};
+  const stateKey = `${meeting.id}:${kind}`;
+  state.ui.meetingRecipients[stateKey] = state.ui.meetingRecipients[stateKey] || new Set();
+  const selected = state.ui.meetingRecipients[stateKey];
+  const eligible = state.dues.filter(m=> m.email || (m.altEmails && m.altEmails.length>0));
+
+  const box = el(`<div class="card no-print" style="margin-top:12px; background:#FBF8F0;"></div>`);
+  if(eligible.length===0){
+    box.appendChild(el(`<div class="empty" style="padding:16px;">No members have an email address on file yet.</div>`));
+    container.appendChild(box);
+    return;
+  }
+  const btnRow = el(`<div style="display:flex; gap:10px; margin-bottom:12px;"></div>`);
+  const selectAllBtn = el(`<button class="btn ghost small">Select all</button>`);
+  const deselectAllBtn = el(`<button class="btn ghost small">Deselect all</button>`);
+  selectAllBtn.onclick = ()=>{ eligible.forEach(m=> selected.add(m.id)); renderMeetingRecipientPicker(container, meeting, kind, sendBtn); };
+  deselectAllBtn.onclick = ()=>{ selected.clear(); renderMeetingRecipientPicker(container, meeting, kind, sendBtn); };
+  btnRow.appendChild(selectAllBtn); btnRow.appendChild(deselectAllBtn);
+  box.appendChild(btnRow);
+
+  const listWrap = el(`<div class="grid" style="grid-template-columns:repeat(auto-fill, minmax(200px,1fr)); gap:8px; margin-bottom:14px;"></div>`);
+  eligible.sort((a,b)=>a.name.localeCompare(b.name)).forEach(m=>{
+    const checked = selected.has(m.id);
+    const row = el(`<label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:6px 8px; border:1px solid var(--card-border); border-radius:7px; cursor:pointer; background:${checked?'#F1EAD6':'#fff'};">
+      <input type="checkbox" style="width:auto;" ${checked?'checked':''}> ${m.name}
+    </label>`);
+    row.querySelector('input').onchange = (e)=>{
+      if(e.target.checked) selected.add(m.id); else selected.delete(m.id);
+      renderMeetingRecipientPicker(container, meeting, kind, sendBtn);
+    };
+    listWrap.appendChild(row);
+  });
+  box.appendChild(listWrap);
+
+  const sendRow = el(`<div style="display:flex; gap:10px; align-items:center;"></div>`);
+  const goBtn = el(`<button class="btn">${selected.size>0?`Send to ${selected.size} selected`:'Select at least one member'}</button>`);
+  goBtn.disabled = selected.size===0;
+  const progressLabel = el(`<span class="muted" style="font-size:12.5px;"></span>`);
+  goBtn.onclick = async ()=>{
+    goBtn.disabled = true;
+    await sendMeetingEmail(kind, meeting, [...selected], (i,total)=>{ progressLabel.textContent = `Sending ${i} of ${total}…`; });
+    progressLabel.textContent = "";
+    goBtn.disabled = selected.size===0;
+  };
+  sendRow.appendChild(goBtn); sendRow.appendChild(progressLabel);
+  box.appendChild(sendRow);
+
+  container.appendChild(box);
+}
+
+function renderMeetings(){
+  const wrap = el(`<div></div>`);
+
+  const formCard = el(`<div class="card no-print" style="margin-bottom:20px;"></div>`);
+  formCard.appendChild(el(`<div class="section-title">New meeting<div class="rule"></div></div>`));
+  const form = el(`<div class="form-grid" style="grid-template-columns:1.6fr 1fr 1fr 1.6fr;">
+    <div class="field"><label>Title</label><input type="text" id="mt-title" placeholder="e.g. General Meeting"></div>
+    <div class="field"><label>Date</label><input type="date" id="mt-date" value="${new Date().toISOString().slice(0,10)}"></div>
+    <div class="field"><label>Time</label><input type="time" id="mt-time"></div>
+    <div class="field"><label>Location</label><input type="text" id="mt-location" placeholder="e.g. Clubhouse"></div>
+  </div>`);
+  formCard.appendChild(form);
+  const agendaField = el(`<div class="field" style="margin-top:14px;">
+    <label>Agenda</label>
+    <textarea id="mt-agenda" rows="4" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'Inter', sans-serif; font-size:13.5px; resize:vertical;" placeholder="One item per line, e.g.&#10;Welcome and apologies&#10;Treasurer's report&#10;General business"></textarea>
+  </div>`);
+  formCard.appendChild(agendaField);
+  const addBtnRow = el(`<div style="margin-top:14px; display:flex; gap:10px; align-items:center;"><button class="btn">Save meeting</button><span class="muted" id="mt-hint" style="font-size:12.5px;"></span></div>`);
+  formCard.appendChild(addBtnRow);
+  addBtnRow.querySelector('button').onclick = ()=>{
+    const title = form.querySelector('#mt-title').value.trim();
+    const date = form.querySelector('#mt-date').value;
+    const hint = addBtnRow.querySelector('#mt-hint');
+    if(!title){ hint.textContent = "Give the meeting a title."; return; }
+    if(!date){ hint.textContent = "Please pick a date."; return; }
+    state.meetings.push({
+      id: uid(), title, date,
+      time: form.querySelector('#mt-time').value,
+      location: form.querySelector('#mt-location').value.trim(),
+      agenda: agendaField.querySelector('textarea').value,
+      attendees: "", minutes: "",
+      createdAt: new Date().toISOString()
+    });
+    saveState(); showToast("Meeting saved"); render();
+  };
+  wrap.appendChild(formCard);
+
+  const listCard = el(`<div class="card"></div>`);
+  listCard.appendChild(el(`<div class="section-title">Meetings<div class="rule"></div></div>`));
+  const meetings = [...state.meetings].sort((a,b)=> (b.date||"").localeCompare(a.date||""));
+  if(meetings.length===0){
+    listCard.appendChild(el(`<div class="empty"><div class="big">No meetings yet</div>Add one above to get started.</div>`));
+  } else {
+    const tbl = el(`<table><thead><tr><th>Date</th><th>Meeting</th><th>Invite</th><th>Minutes</th><th></th></tr></thead><tbody></tbody></table>`);
+    const tb = tbl.querySelector('tbody');
+    meetings.forEach(mtg=>{
+      const open = state.ui.expandedMeeting === mtg.id;
+      const tr = el(`<tr class="member-row">
+        <td class="muted">${fmtDate(mtg.date)}</td>
+        <td>${mtg.title}</td>
+        <td class="muted">${mtg.inviteSentAt?`Sent ${fmtDate(mtg.inviteSentAt.slice(0,10))}`:'—'}</td>
+        <td class="muted">${mtg.minutes&&mtg.minutes.trim()?(mtg.minutesSentAt?`Sent ${fmtDate(mtg.minutesSentAt.slice(0,10))}`:'Drafted'):'—'}</td>
+        <td class="right"><button class="btn ghost small">${open?'Close':'Manage'}</button></td>
+      </tr>`);
+      tr.querySelector('button').onclick = (e)=>{ e.stopPropagation(); state.ui.expandedMeeting = open?null:mtg.id; render(); };
+      tr.onclick = ()=>{ state.ui.expandedMeeting = open?null:mtg.id; render(); };
+      tb.appendChild(tr);
+
+      if(open){
+        const dtr = document.createElement('tr');
+        dtr.className = "member-detail";
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        const inner = el(`<div class="member-detail-inner" style="grid-template-columns:1fr 1fr;"></div>`);
+
+        // --- Agenda / invite column ---
+        const agendaCol = el(`<div></div>`);
+        agendaCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:0 0 8px;">Agenda</h3>`));
+        const agendaEdit = el(`<textarea rows="5" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'Inter', sans-serif; font-size:13px; resize:vertical;">${mtg.agenda||''}</textarea>`);
+        agendaCol.appendChild(agendaEdit);
+        const agendaBtnRow = el(`<div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;"></div>`);
+        const saveAgendaBtn = el(`<button class="btn ghost small">Save agenda</button>`);
+        saveAgendaBtn.onclick = ()=>{ mtg.agenda = agendaEdit.value; saveState(); showToast("Agenda saved"); };
+        const dlInviteBtn = el(`<button class="btn ghost small">Download invite (PDF)</button>`);
+        dlInviteBtn.onclick = ()=>{ const doc = buildMeetingInvitePdf(mtg); if(doc) doc.save(`${mtg.title.replace(/\s+/g,'_')}_Invite.pdf`); };
+        const sendInviteBtn = el(`<button class="btn">Send invite to members</button>`);
+        const invitePanel = el(`<div></div>`);
+        sendInviteBtn.onclick = ()=>{
+          state.ui.meetingInvitePanelOpen = state.ui.meetingInvitePanelOpen===mtg.id ? null : mtg.id;
+          if(state.ui.meetingInvitePanelOpen===mtg.id) renderMeetingRecipientPicker(invitePanel, mtg, 'invite'); else invitePanel.innerHTML = "";
+        };
+        agendaBtnRow.appendChild(saveAgendaBtn); agendaBtnRow.appendChild(dlInviteBtn); agendaBtnRow.appendChild(sendInviteBtn);
+        agendaCol.appendChild(agendaBtnRow);
+        agendaCol.appendChild(invitePanel);
+        if(state.ui.meetingInvitePanelOpen===mtg.id) renderMeetingRecipientPicker(invitePanel, mtg, 'invite');
+
+        // --- Minutes column ---
+        const minutesCol = el(`<div></div>`);
+        minutesCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:0 0 8px;">Attendees</h3>`));
+        const attendeesEdit = el(`<input type="text" value="${mtg.attendees||''}" placeholder="Names, comma separated" style="width:100%;">`);
+        minutesCol.appendChild(attendeesEdit);
+        minutesCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:14px 0 8px;">Minutes</h3>`));
+        const minutesEdit = el(`<textarea rows="6" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'Inter', sans-serif; font-size:13px; resize:vertical;" placeholder="Record what was discussed and decided…">${mtg.minutes||''}</textarea>`);
+        minutesCol.appendChild(minutesEdit);
+        const minutesBtnRow = el(`<div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;"></div>`);
+        const saveMinutesBtn = el(`<button class="btn ghost small">Save minutes</button>`);
+        saveMinutesBtn.onclick = ()=>{ mtg.attendees = attendeesEdit.value; mtg.minutes = minutesEdit.value; saveState(); showToast("Minutes saved"); };
+        const dlMinutesBtn = el(`<button class="btn ghost small">Download minutes (PDF)</button>`);
+        dlMinutesBtn.onclick = ()=>{ const doc = buildMeetingMinutesPdf(mtg); if(doc) doc.save(`${mtg.title.replace(/\s+/g,'_')}_Minutes.pdf`); };
+        const sendMinutesBtn = el(`<button class="btn">Send minutes to members</button>`);
+        const minutesPanel = el(`<div></div>`);
+        sendMinutesBtn.onclick = ()=>{
+          if(!mtg.minutes || !mtg.minutes.trim()){ showToast("Add minutes before sending them"); return; }
+          state.ui.meetingMinutesPanelOpen = state.ui.meetingMinutesPanelOpen===mtg.id ? null : mtg.id;
+          if(state.ui.meetingMinutesPanelOpen===mtg.id) renderMeetingRecipientPicker(minutesPanel, mtg, 'minutes'); else minutesPanel.innerHTML = "";
+        };
+        minutesBtnRow.appendChild(saveMinutesBtn); minutesBtnRow.appendChild(dlMinutesBtn); minutesBtnRow.appendChild(sendMinutesBtn);
+        minutesCol.appendChild(minutesBtnRow);
+        minutesCol.appendChild(minutesPanel);
+        if(state.ui.meetingMinutesPanelOpen===mtg.id) renderMeetingRecipientPicker(minutesPanel, mtg, 'minutes');
+
+        inner.appendChild(agendaCol); inner.appendChild(minutesCol);
+        td.appendChild(inner);
+
+        const removeRow = el(`<div style="padding:0 18px 16px;"></div>`);
+        const removeBtn = el(`<button class="btn ghost small">Delete meeting</button>`);
+        makeConfirmDelete(removeBtn, ()=>{
+          state.meetings = state.meetings.filter(x=>x.id!==mtg.id);
+          saveState(); showToast("Meeting deleted"); render();
+        }, "Confirm?");
+        removeRow.appendChild(removeBtn);
+        td.appendChild(removeRow);
+
+        dtr.appendChild(td);
+        tb.appendChild(dtr);
+      }
+    });
+    listCard.appendChild(tbl);
+  }
+  wrap.appendChild(listCard);
+
   return wrap;
 }
 
@@ -2546,6 +2901,8 @@ function renderSettings(){
 
   const presidentBox = officerBlock("President", state.club.presidentName, "s-presidentname", "presidentSignature", "s-president-sig");
   sigCard.appendChild(presidentBox);
+  const secretaryBox = officerBlock("Secretary", state.club.secretaryName, "s-secretaryname", "secretarySignature", "s-secretary-sig");
+  sigCard.appendChild(secretaryBox);
   const treasurerBox = officerBlock("Treasurer", state.club.treasurerName, "s-treasurername", "treasurerSignature", "s-treasurer-sig");
   treasurerBox.style.marginBottom = "0"; treasurerBox.style.paddingBottom = "0"; treasurerBox.style.borderBottom = "none";
   treasurerBox.querySelector('.field').insertAdjacentElement('afterend', el(`<div class="field" style="margin-bottom:10px;"><label>Treasurer email</label><input type="email" id="s-treasureremail" value="${state.club.treasurerEmail||""}" placeholder="treasurer@club.org"></div>`));
@@ -2554,6 +2911,7 @@ function renderSettings(){
   const sigSaveBtn = el(`<button class="btn" style="margin-top:18px; display:block;">Save office bearers</button>`);
   sigSaveBtn.onclick = ()=>{
     state.club.presidentName = presidentBox.querySelector('#s-presidentname').value.trim();
+    state.club.secretaryName = secretaryBox.querySelector('#s-secretaryname').value.trim();
     state.club.treasurerName = treasurerBox.querySelector('#s-treasurername').value.trim();
     state.club.treasurerEmail = treasurerBox.querySelector('#s-treasureremail').value.trim();
     saveState(); showToast("Office bearers saved"); render();
