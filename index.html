@@ -232,6 +232,8 @@ const MEMBERSHIP_RATES = {
   "Leo-Lion": 97.5
 };
 
+const CLUB_ROLES = ["President", "Vice President", "Secretary", "Treasurer", "Membership Chair"];
+
 const MEMBER_NAMES = [
   ["Mandy Proctor","Family members"],["Annette Bothma","Full members"],["Ewen Smith","Full members"],
   ["Liz Coetzee","Full members"],["Lorna van Romburgh","Full members"],["Brent Proctor","Full members"],
@@ -273,7 +275,7 @@ let currentClubName = null;
 let clubsList = null; // cached list of {id,name} for the login dropdown
 let state = {
   club: { name: "My Lions Club", logo: null, bankDetailsAdmin: "", bankDetailsProjects: "", treasurerName: "", treasurerEmail: "",
-    address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null, secretaryName: "", secretarySignature: null },
+    address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null, secretaryName: "", secretaryEmail: "", secretarySignature: null },
   security: { adminPassword: "" },
   fiscalYear: defaultFY(),
   openingBalances: { Admin: 0, Projects: 0 },
@@ -332,6 +334,23 @@ function clubInitials(name){
   if(words.length===0) return "LC";
   if(words.length===1) return words[0].slice(0,2).toUpperCase();
   return (words[0][0]+words[1][0]).toUpperCase();
+}
+
+// Finds the member currently tagged with a given club role (President,
+// Secretary, Treasurer, etc). If more than one member somehow shares a
+// role, the first one found is used.
+function memberWithRole(role){
+  return state.dues.find(m => (m.roles||[]).includes(role)) || null;
+}
+// Prefers the tagged member's name; falls back to the manually-typed
+// Settings field for clubs that haven't assigned roles yet.
+function roleName(role, fallbackField){
+  const m = memberWithRole(role);
+  return m ? m.name : (state.club[fallbackField] || "");
+}
+function roleEmail(role, fallbackField){
+  const m = memberWithRole(role);
+  return m ? (m.email || "") : (state.club[fallbackField] || "");
 }
 
 // The club's Lions Clubs International affiliate emblem, embedded as a fixed
@@ -751,7 +770,7 @@ function renderSidebar(){
       currentClubId = null; currentClubName = null;
       state = {
         club: { name: "My Lions Club", logo: null, bankDetailsAdmin: "", bankDetailsProjects: "", treasurerName: "", treasurerEmail: "",
-          address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null, secretaryName: "", secretarySignature: null },
+          address: "", phone: "", email: "", presidentName: "", presidentSignature: null, treasurerSignature: null, secretaryName: "", secretaryEmail: "", secretarySignature: null },
         security: { adminPassword: "" },
         fiscalYear: defaultFY(),
         openingBalances: { Admin: 0, Projects: 0 },
@@ -1299,8 +1318,8 @@ function renderSignatureBlock(){
     <div class="sig-title">${label}</div>
   </div>`;
   return el(`<div class="sig-block">
-    ${col('President', state.club.presidentName, 'presidentSignature')}
-    ${col('Treasurer', state.club.treasurerName, 'treasurerSignature')}
+    ${col('President', roleName('President','presidentName'), 'presidentSignature')}
+    ${col('Treasurer', roleName('Treasurer','treasurerName'), 'treasurerSignature')}
     <div class="sig-col" style="flex:0 0 140px;">
       <div class="sig-image"></div>
       <div class="sig-line"></div>
@@ -1694,14 +1713,15 @@ function addPdfFooterDetails(doc, marginX, y, bankDetailsText){
       y += 5.5;
     });
   }
-  if(state.club.treasurerName || state.club.treasurerEmail){
+  const tName = roleName('Treasurer','treasurerName'), tEmail = roleEmail('Treasurer','treasurerEmail');
+  if(tName || tEmail){
     y += 10;
     if(y > 270){ doc.addPage(); y = 20; }
     doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(20,42,70);
     doc.text('Any queries', marginX, y);
     y += 6;
     doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(60,70,85);
-    const contact = [state.club.treasurerName, state.club.treasurerEmail].filter(Boolean).join('  —  ');
+    const contact = [tName, tEmail].filter(Boolean).join('  —  ');
     doc.text(`Treasurer: ${contact}`, marginX, y);
     y += 5.5;
   }
@@ -1779,8 +1799,8 @@ function buildReportPdf(){
       if(includeSig){
         y += 18;
         checkBreak();
-        drawSig('President', state.club.presidentName, state.club.presidentSignature, marginX);
-        drawSig('Treasurer', state.club.treasurerName, state.club.treasurerSignature, marginX+95);
+        drawSig('President', roleName('President','presidentName'), state.club.presidentSignature, marginX);
+        drawSig('Treasurer', roleName('Treasurer','treasurerName'), state.club.treasurerSignature, marginX+95);
       }
     } else {
       const rep = categoryReport(period, account, state.ui.reportCategory);
@@ -1899,7 +1919,15 @@ function buildMeetingInvitePdf(meeting){
     });
   }
 
-  y = addPdfFooterDetails(doc, marginX, y, "");
+  const secName = roleName('Secretary','secretaryName'), secEmail = roleEmail('Secretary','secretaryEmail');
+  if(secName || secEmail){
+    y += 14;
+    if(y > 270){ doc.addPage(); y = 20; }
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,100,115);
+    const who = secName ? `Club Secretary${secName?` (${secName})`:''}` : 'Club Secretary';
+    doc.text(`Reply to ${who} for any questions${secEmail?`: ${secEmail}`:''}`, marginX, y);
+    doc.setTextColor(20,20,20);
+  }
   return doc;
 }
 
@@ -1961,8 +1989,8 @@ function buildMeetingMinutesPdf(meeting){
     doc.text(label, x, y+11);
     doc.setTextColor(20,20,20);
   }
-  drawSig('President', state.club.presidentName, state.club.presidentSignature, marginX);
-  drawSig('Secretary', state.club.secretaryName, state.club.secretarySignature, marginX+100);
+  drawSig('President', roleName('President','presidentName'), state.club.presidentSignature, marginX);
+  drawSig('Secretary', roleName('Secretary','secretaryName'), state.club.secretarySignature, marginX+100);
 
   return doc;
 }
@@ -1983,8 +2011,10 @@ async function sendMeetingEmail(kind, meeting, memberIds, onProgress){
     if(onProgress) onProgress(i+1, members.length);
     const recipients = [m.email, ...(m.altEmails||[])].map(e=>(e||"").trim()).filter(Boolean);
     if(recipients.length===0){ failed++; continue; }
+    const secName = roleName('Secretary','secretaryName'), secEmail = roleEmail('Secretary','secretaryEmail');
+    const replyLine = (secName || secEmail) ? `<p style="color:#666; font-size:13px;">Reply to Club Secretary${secName?` (${secName})`:''} for any questions${secEmail?`: ${secEmail}`:''}.</p>` : '';
     const html = kind==='invite'
-      ? `<p>Hi ${m.name.split(' ')[0]},</p><p>You're invited to <strong>${meeting.title||'a club meeting'}</strong> on ${fmtDate(meeting.date)}${meeting.time?` at ${meeting.time}`:''}${meeting.location?`, ${meeting.location}`:''}. The agenda is attached.</p><p>Kind regards,<br>${state.club.name}</p>`
+      ? `<p>Hi ${m.name.split(' ')[0]},</p><p>You're invited to <strong>${meeting.title||'a club meeting'}</strong> on ${fmtDate(meeting.date)}${meeting.time?` at ${meeting.time}`:''}${meeting.location?`, ${meeting.location}`:''}. The agenda is attached.</p>${replyLine}<p>Kind regards,<br>${state.club.name}</p>`
       : `<p>Hi ${m.name.split(' ')[0]},</p><p>Please find attached the minutes from <strong>${meeting.title||'the club meeting'}</strong> held on ${fmtDate(meeting.date)}.</p><p>Kind regards,<br>${state.club.name}</p>`;
     try{
       const { error } = await withTimeout(sb.functions.invoke('send-Statement', {
@@ -2055,8 +2085,9 @@ function buildAuditPackPdf(periodId){
   doc.setDrawColor(200,154,62); doc.setLineWidth(0.6); doc.line(60, y, 150, y); y += 12;
   doc.setFontSize(9.5); doc.setTextColor(90,100,115);
   doc.text(`Prepared: ${fmtDate(new Date().toISOString().slice(0,10))}`, 105, y, {align:'center'}); y += 6;
-  if(state.club.treasurerName){ doc.text(`Treasurer: ${state.club.treasurerName}`, 105, y, {align:'center'}); y += 6; }
-  if(state.club.presidentName){ doc.text(`President: ${state.club.presidentName}`, 105, y, {align:'center'}); y += 6; }
+  const coverTreasurer = roleName('Treasurer','treasurerName'), coverPresident = roleName('President','presidentName');
+  if(coverTreasurer){ doc.text(`Treasurer: ${coverTreasurer}`, 105, y, {align:'center'}); y += 6; }
+  if(coverPresident){ doc.text(`President: ${coverPresident}`, 105, y, {align:'center'}); y += 6; }
   if(period.closed){ doc.setTextColor(47,111,79); doc.text('🔒 Closed financial year — figures are final', 105, y, {align:'center'}); }
   doc.setTextColor(20,20,20);
 
@@ -2168,8 +2199,8 @@ function buildAuditPackPdf(periodId){
     doc.text(label, x, y+11);
     doc.setTextColor(20,20,20);
   }
-  drawSig('President', state.club.presidentName, state.club.presidentSignature, marginX);
-  drawSig('Treasurer', state.club.treasurerName, state.club.treasurerSignature, marginX+100);
+  drawSig('President', roleName('President','presidentName'), state.club.presidentSignature, marginX);
+  drawSig('Treasurer', roleName('Treasurer','treasurerName'), state.club.treasurerSignature, marginX+100);
   y += 35;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
   doc.text('Date: ______________________', marginX, y);
@@ -2641,7 +2672,7 @@ function renderDues(){
   tableCard.appendChild(el(`<div class="section-title">Members<div class="rule"></div><button class="btn ghost small no-print" id="email-all-btn">Email all statements</button></div>`));
   tableCard.appendChild(el(`<p class="section-sub">Click a member to record a payment, add a one-off charge, edit their email, or view their history.</p>`));
   tableCard.querySelector('#email-all-btn').onclick = (e)=> emailAllMemberStatements(e.target);
-  const tbl = el(`<table><thead><tr><th>Member #</th><th>Member</th><th>Type</th><th class="right">Balance owing</th><th></th></tr></thead><tbody></tbody></table>`);
+  const tbl = el(`<table><thead><tr><th>Member #</th><th>Member</th><th>Type</th><th>Role</th><th class="right">Balance owing</th><th></th></tr></thead><tbody></tbody></table>`);
   const tb = tbl.querySelector('tbody');
   [...state.dues].sort((a,b)=>a.name.localeCompare(b.name)).forEach(d=>{
     const open = state.ui.expandedMember === d.id;
@@ -2649,6 +2680,7 @@ function renderDues(){
       <td class="muted num">${d.memberNumber||'—'}</td>
       <td>${d.name}</td>
       <td class="muted">${d.type}</td>
+      <td>${(d.roles&&d.roles.length)?d.roles.map(r=>`<span class="tag admin" style="margin-right:4px;">${r}</span>`).join(''):'<span class="muted">—</span>'}</td>
       <td class="right num ${d.owing>0?'neg':(d.owing<0?'pos':'')}">${fmtMoney(d.owing)}</td>
       <td class="right"><button class="btn ghost small">${open?'Close':'Manage'}</button></td>
     </tr>`);
@@ -2659,7 +2691,7 @@ function renderDues(){
       const dtr = document.createElement('tr');
       dtr.className = "member-detail";
       const td = document.createElement('td');
-      td.colSpan = 5;
+      td.colSpan = 6;
       const inner = el(`<div class="member-detail-inner"></div>`);
 
       const actionsCol = el(`<div></div>`);
@@ -2671,6 +2703,31 @@ function renderDues(){
         saveState(); showToast("Member number saved"); render();
       };
       actionsCol.appendChild(memberNoForm);
+
+      actionsCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:16px 0 8px;">Club role(s)</h3>`));
+      const rolesWrap = el(`<div class="chip-wrap"></div>`);
+      const memberRoles = d.roles || [];
+      CLUB_ROLES.forEach(role=>{
+        const takenBy = memberWithRole(role);
+        const isMine = memberRoles.includes(role);
+        const label = el(`<label style="display:flex; align-items:center; gap:6px; font-size:12.5px; padding:5px 10px; border:1px solid var(--card-border); border-radius:16px; cursor:pointer; background:${isMine?'#F1EAD6':'#fff'};" title="${(!isMine && takenBy)?`Currently: ${takenBy.name}`:''}">
+          <input type="checkbox" style="width:auto;" ${isMine?'checked':''}> ${role}
+        </label>`);
+        label.querySelector('input').onchange = (e)=>{
+          d.roles = d.roles || [];
+          if(e.target.checked){
+            // Only one member holds a given role at a time
+            state.dues.forEach(other=>{ if(other.id!==d.id && other.roles) other.roles = other.roles.filter(r=>r!==role); });
+            if(!d.roles.includes(role)) d.roles.push(role);
+          } else {
+            d.roles = d.roles.filter(r=>r!==role);
+          }
+          saveState(); showToast(`${role} ${e.target.checked?'assigned to':'removed from'} ${d.name}`); render();
+        };
+        rolesWrap.appendChild(label);
+      });
+      actionsCol.appendChild(rolesWrap);
+      actionsCol.appendChild(el(`<p class="section-sub" style="margin-top:6px; margin-bottom:0;">A member's name (and email, for Secretary/Treasurer) is used automatically wherever that role appears — reports, statements, meeting invites — once assigned here.</p>`));
 
       actionsCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:16px 0 8px;">Email address</h3>`));
       const emailForm = el(`<div class="mini-form"><input type="email" placeholder="name@example.com" value="${d.email||''}" style="flex:1;"><button class="btn ghost small">Save</button></div>`);
@@ -2874,7 +2931,7 @@ function renderSettings(){
   // --- Office bearers & signatures ---
   const sigCard = el(`<div class="card" style="max-width:560px; margin-bottom:20px;"></div>`);
   sigCard.appendChild(el(`<div class="section-title">Office bearers & signatures<div class="rule"></div></div>`));
-  sigCard.appendChild(el(`<p class="section-sub">Appears as a sign-off block at the bottom of reports, for when they're submitted to members.</p>`));
+  sigCard.appendChild(el(`<p class="section-sub">Appears as a sign-off block at the bottom of reports, for when they're submitted to members. Tip: if you tag a member with a role (President, Secretary, Treasurer) in Member Dues → Manage, their name and email are used automatically instead of what's typed here — these fields are just a fallback for anyone not yet tagged, plus where signature images are uploaded.</p>`));
 
   const officerBlock = (label, nameVal, nameId, sigKey, sigInputId)=>{
     const box = el(`<div style="margin-bottom:18px; padding-bottom:18px; border-bottom:1px solid var(--card-border);"></div>`);
