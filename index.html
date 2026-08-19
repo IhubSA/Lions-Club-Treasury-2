@@ -1881,6 +1881,7 @@ function buildMeetingInvitePdf(meeting){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   const marginX = 15, rightX = 195;
+  const tableWidth = rightX - marginX;
   let y = 20;
   const textStartX = state.club.logo ? marginX + 24 : marginX;
 
@@ -1890,38 +1891,93 @@ function buildMeetingInvitePdf(meeting){
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,100,115);
   doc.text('Meeting Invitation', textStartX, y+6);
   doc.setTextColor(20,20,20);
+  y += 18;
 
-  y += 20;
-  doc.setDrawColor(200,154,62); doc.setLineWidth(0.6); doc.line(marginX, y, rightX, y);
-  y += 10;
+  // --- Blue banner: "AGENDA FOR ... TO BE HELD ON ..." / "TIME AT LOCATION" ---
+  let dateLine = '';
+  if(meeting.date){
+    const d = new Date(meeting.date+'T00:00:00');
+    dateLine = `${d.toLocaleDateString('en-US',{weekday:'long'}).toUpperCase()} ${d.getDate()} ${d.toLocaleDateString('en-US',{month:'long'}).toUpperCase()} ${d.getFullYear()}`;
+  }
+  let timeLine = '';
+  if(meeting.time){
+    const [hh,mm] = meeting.time.split(':');
+    timeLine = `${hh}H${mm}`;
+  }
+  const bannerLine1 = `AGENDA FOR ${(meeting.title||'MEETING').toUpperCase()}${dateLine?` TO BE HELD ON ${dateLine}`:''}`;
+  const bannerLine2 = [timeLine, meeting.location?meeting.location.toUpperCase():''].filter(Boolean).join(' AT ');
 
-  doc.setFontSize(14); doc.setFont('helvetica','bold');
-  doc.text(meeting.title || 'Club Meeting', marginX, y); y += 9;
-  doc.setFontSize(10.5); doc.setFont('helvetica','normal');
-  doc.text(`Date: ${fmtDate(meeting.date)}${meeting.time?`  •  Time: ${meeting.time}`:''}`, marginX, y); y += 6;
-  if(meeting.location){ doc.text(`Location: ${meeting.location}`, marginX, y); y += 6; }
-  y += 6;
+  doc.setFont('helvetica','bold'); doc.setFontSize(11);
+  const line1Wrapped = doc.splitTextToSize(bannerLine1, tableWidth-10);
+  const line2Wrapped = bannerLine2 ? doc.splitTextToSize(bannerLine2, tableWidth-10) : [];
+  const bannerH = (line1Wrapped.length + line2Wrapped.length) * 6 + 6;
+  doc.setFillColor(24,105,170);
+  doc.rect(marginX, y, tableWidth, bannerH, 'F');
+  doc.setTextColor(255,255,255);
+  let by = y + 8;
+  [...line1Wrapped, ...line2Wrapped].forEach(l=>{ doc.text(l, marginX+tableWidth/2, by, {align:'center'}); by += 6; });
+  doc.setTextColor(20,20,20);
+  y += bannerH;
 
-  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(20,42,70);
-  doc.text('Agenda', marginX, y); y += 3;
-  doc.setDrawColor(19,42,70); doc.setLineWidth(0.3); doc.line(marginX, y, rightX, y); y += 8;
-  doc.setTextColor(20,20,20); doc.setFont('helvetica','normal'); doc.setFontSize(10.5);
-  const agendaItems = (meeting.agenda||'').split('\n').map(l=>l.trim()).filter(Boolean);
-  if(agendaItems.length===0){
-    doc.setTextColor(120); doc.text('No agenda items added.', marginX, y); doc.setTextColor(20,20,20); y += 7;
+  // --- Bordered, numbered agenda table (supports indented detail lines) ---
+  const numColWidth = 12;
+  const itemX = marginX + numColWidth;
+  const itemWidth = tableWidth - numColWidth;
+  const lineH = 5.2;
+
+  const items = [];
+  (meeting.agenda||'').split('\n').forEach(raw=>{
+    if(raw.trim()===''){ return; }
+    const indented = /^[ \t]/.test(raw);
+    if(indented && items.length>0){
+      items[items.length-1].detail = items[items.length-1].detail ? items[items.length-1].detail + ' ' + raw.trim() : raw.trim();
+    } else {
+      items.push({ title: raw.trim(), detail: '' });
+    }
+  });
+
+  doc.setDrawColor(0,0,0); doc.setLineWidth(0.3);
+  if(items.length===0){
+    const h = 12;
+    if(y + h > 285){ doc.addPage(); y = 20; }
+    doc.rect(marginX, y, tableWidth, h);
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(120);
+    doc.text('No agenda items added.', marginX+4, y+7.5);
+    doc.setTextColor(20,20,20);
+    y += h;
   } else {
-    agendaItems.forEach((item, i)=>{
-      const lines = doc.splitTextToSize(`${i+1}. ${item}`, rightX-marginX-4);
-      lines.forEach(line=>{
-        if(y > 280){ doc.addPage(); y = 20; }
-        doc.text(line, marginX, y); y += 6.5;
-      });
+    items.forEach((item, idx)=>{
+      doc.setFont('helvetica','normal'); doc.setFontSize(10.5);
+      const titleLines = doc.splitTextToSize(item.title, itemWidth-6);
+      let detailLines = [];
+      if(item.detail){
+        doc.setFontSize(9.5);
+        detailLines = doc.splitTextToSize(item.detail, itemWidth-6);
+      }
+      const rowHeight = 4 + titleLines.length*lineH + (detailLines.length ? detailLines.length*(lineH-0.8) + 1 : 0);
+
+      if(y + rowHeight > 285){ doc.addPage(); y = 20; }
+
+      doc.rect(marginX, y, tableWidth, rowHeight);
+      doc.line(itemX, y, itemX, y+rowHeight);
+
+      doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
+      doc.text(`${idx+1}.`, marginX+3, y+6);
+
+      let ty = y + 6;
+      titleLines.forEach(l=>{ doc.text(l, itemX+3, ty); ty += lineH; });
+      if(detailLines.length){
+        doc.setFontSize(9.5); doc.setTextColor(70,70,70);
+        detailLines.forEach(l=>{ doc.text(l, itemX+3, ty); ty += (lineH-0.8); });
+        doc.setTextColor(20,20,20);
+      }
+      y += rowHeight;
     });
   }
 
   const secName = roleName('Secretary','secretaryName'), secEmail = roleEmail('Secretary','secretaryEmail');
   if(secName || secEmail){
-    y += 14;
+    y += 12;
     if(y > 270){ doc.addPage(); y = 20; }
     doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,100,115);
     const who = secName ? `Club Secretary${secName?` (${secName})`:''}` : 'Club Secretary';
@@ -2450,7 +2506,8 @@ function renderMeetings(){
   formCard.appendChild(form);
   const agendaField = el(`<div class="field" style="margin-top:14px;">
     <label>Agenda</label>
-    <textarea id="mt-agenda" rows="4" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'Inter', sans-serif; font-size:13.5px; resize:vertical;" placeholder="One item per line, e.g.&#10;Welcome and apologies&#10;Treasurer's report&#10;General business"></textarea>
+    <textarea id="mt-agenda" rows="5" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'Inter', sans-serif; font-size:13.5px; resize:vertical;" placeholder="One item per line, e.g.&#10;Invocation&#10;   Being in Lions allows us to serve others...&#10;Welcome&#10;Treasurer's report&#10;Pledge"></textarea>
+    <p class="section-sub" style="margin-top:6px; margin-bottom:0;">Indent a line (start it with a space or tab) to add it as detail text under the item above it — e.g. the Invocation or Pledge wording.</p>
   </div>`);
   formCard.appendChild(agendaField);
   const addBtnRow = el(`<div style="margin-top:14px; display:flex; gap:10px; align-items:center;"><button class="btn">Save meeting</button><span class="muted" id="mt-hint" style="font-size:12.5px;"></span></div>`);
