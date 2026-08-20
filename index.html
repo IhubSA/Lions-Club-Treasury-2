@@ -234,6 +234,36 @@ const MEMBERSHIP_RATES = {
 
 const CLUB_ROLES = ["President", "Vice President", "Secretary", "Treasurer", "Membership Chair"];
 
+const DEFAULT_AGENDA_SECTIONS = [
+  "Attendance", "Invocation", "Welcome", "Secretary Report", "Treasurer Report",
+  "Membership Report", "Marketing Report", "Projects", "Fund Raising", "Socials",
+  "Zone / District", "General", "Tail Twisting", "Pledge"
+];
+function defaultAgendaItems(){
+  return DEFAULT_AGENDA_SECTIONS.map(title=>({ id: uid(), title, content: "" }));
+}
+
+// Renders one box per agenda section, each independently editable, with
+// add/remove controls. Mutates itemsArray directly; re-renders only this
+// sub-tree on structural changes (add/remove) for efficiency.
+function renderAgendaEditor(container, itemsArray){
+  container.innerHTML = "";
+  itemsArray.forEach((sec, idx)=>{
+    const box = el(`<div class="card" style="margin-bottom:10px; padding:14px;"></div>`);
+    const titleInput = el(`<input type="text" value="${sec.title||''}" placeholder="Section title" style="font-weight:600; margin-bottom:8px;">`);
+    const contentInput = el(`<textarea rows="2" placeholder="Details for this section (optional)" style="width:100%; padding:8px; border:1px solid var(--card-border); border-radius:6px; font-family:'Inter',sans-serif; font-size:13px; resize:vertical;">${sec.content||''}</textarea>`);
+    const removeBtn = el(`<button class="btn ghost small" style="margin-top:8px;">Remove section</button>`);
+    titleInput.oninput = ()=>{ sec.title = titleInput.value; };
+    contentInput.oninput = ()=>{ sec.content = contentInput.value; };
+    removeBtn.onclick = ()=>{ itemsArray.splice(idx,1); renderAgendaEditor(container, itemsArray); };
+    box.appendChild(titleInput); box.appendChild(contentInput); box.appendChild(removeBtn);
+    container.appendChild(box);
+  });
+  const addBtn = el(`<button class="btn ghost small">+ Add section</button>`);
+  addBtn.onclick = ()=>{ itemsArray.push({ id: uid(), title:'', content:'' }); renderAgendaEditor(container, itemsArray); };
+  container.appendChild(addBtn);
+}
+
 const MEMBER_NAMES = [
   ["Mandy Proctor","Family members"],["Annette Bothma","Full members"],["Ewen Smith","Full members"],
   ["Liz Coetzee","Full members"],["Lorna van Romburgh","Full members"],["Brent Proctor","Full members"],
@@ -1919,21 +1949,11 @@ function buildMeetingInvitePdf(meeting){
   doc.setTextColor(20,20,20);
   y += bannerH;
 
-  // --- One box per agenda item, each with a bold heading (supports indented detail lines) ---
-  const lineH = 5.4;
+  // --- One box per agenda section, each with a bold heading ---
   const textX = marginX + 6;
   const textWidth = tableWidth - 10;
 
-  const items = [];
-  (meeting.agenda||'').split('\n').forEach(raw=>{
-    if(raw.trim()===''){ return; }
-    const indented = /^[ \t]/.test(raw);
-    if(indented && items.length>0){
-      items[items.length-1].detail = items[items.length-1].detail ? items[items.length-1].detail + ' ' + raw.trim() : raw.trim();
-    } else {
-      items.push({ title: raw.trim(), detail: '' });
-    }
-  });
+  const items = (meeting.agendaItems || []).filter(s => (s.title||'').trim() || (s.content||'').trim());
 
   if(items.length===0){
     const h = 14;
@@ -1941,17 +1961,17 @@ function buildMeetingInvitePdf(meeting){
     doc.setDrawColor(210,210,210); doc.setLineWidth(0.3);
     doc.rect(marginX, y, tableWidth, h);
     doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(120);
-    doc.text('No agenda items added.', textX, y+9);
+    doc.text('No agenda sections added.', textX, y+9);
     doc.setTextColor(20,20,20);
     y += h;
   } else {
     items.forEach((item, idx)=>{
       doc.setFont('helvetica','bold'); doc.setFontSize(11);
-      const headingLines = doc.splitTextToSize(`${idx+1}. ${item.title}`, textWidth);
+      const headingLines = doc.splitTextToSize(`${idx+1}. ${item.title||'Untitled section'}`, textWidth);
       let detailLines = [];
-      if(item.detail){
+      if(item.content && item.content.trim()){
         doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
-        detailLines = doc.splitTextToSize(item.detail, textWidth);
+        detailLines = doc.splitTextToSize(item.content.trim(), textWidth);
       }
       const boxHeight = 6 + headingLines.length*6 + (detailLines.length ? detailLines.length*4.6 + 2 : 0) + 4;
 
@@ -2503,12 +2523,12 @@ function renderMeetings(){
     <div class="field"><label>Location</label><input type="text" id="mt-location" placeholder="e.g. Clubhouse"></div>
   </div>`);
   formCard.appendChild(form);
-  const agendaField = el(`<div class="field" style="margin-top:14px;">
-    <label>Agenda</label>
-    <textarea id="mt-agenda" rows="5" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'Inter', sans-serif; font-size:13.5px; resize:vertical;" placeholder="One item per line, e.g.&#10;Invocation&#10;   Being in Lions allows us to serve others...&#10;Welcome&#10;Treasurer's report&#10;Pledge"></textarea>
-    <p class="section-sub" style="margin-top:6px; margin-bottom:0;">Indent a line (start it with a space or tab) to add it as detail text under the item above it — e.g. the Invocation or Pledge wording.</p>
-  </div>`);
-  formCard.appendChild(agendaField);
+  const agendaHeading = el(`<div class="field" style="margin-top:14px; margin-bottom:8px;"><label>Agenda</label><p class="section-sub" style="margin:0;">One box per section — edit the titles or content freely, remove any you don't need, or add more.</p></div>`);
+  formCard.appendChild(agendaHeading);
+  state.ui.newMeetingAgenda = state.ui.newMeetingAgenda || defaultAgendaItems();
+  const agendaEditorWrap = el(`<div></div>`);
+  formCard.appendChild(agendaEditorWrap);
+  renderAgendaEditor(agendaEditorWrap, state.ui.newMeetingAgenda);
   const addBtnRow = el(`<div style="margin-top:14px; display:flex; gap:10px; align-items:center;"><button class="btn">Save meeting</button><span class="muted" id="mt-hint" style="font-size:12.5px;"></span></div>`);
   formCard.appendChild(addBtnRow);
   addBtnRow.querySelector('button').onclick = ()=>{
@@ -2521,10 +2541,11 @@ function renderMeetings(){
       id: uid(), title, date,
       time: form.querySelector('#mt-time').value,
       location: form.querySelector('#mt-location').value.trim(),
-      agenda: agendaField.querySelector('textarea').value,
+      agendaItems: state.ui.newMeetingAgenda.map(s=>({ ...s })),
       attendees: "", minutes: "",
       createdAt: new Date().toISOString()
     });
+    state.ui.newMeetingAgenda = defaultAgendaItems();
     saveState(); showToast("Meeting saved"); render();
   };
   wrap.appendChild(formCard);
@@ -2560,11 +2581,13 @@ function renderMeetings(){
         // --- Agenda / invite column ---
         const agendaCol = el(`<div></div>`);
         agendaCol.appendChild(el(`<h3 style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin:0 0 8px;">Agenda</h3>`));
-        const agendaEdit = el(`<textarea rows="5" style="width:100%; padding:9px 10px; border:1px solid var(--card-border); border-radius:7px; font-family:'Inter', sans-serif; font-size:13px; resize:vertical;">${mtg.agenda||''}</textarea>`);
-        agendaCol.appendChild(agendaEdit);
+        mtg.agendaItems = mtg.agendaItems || [];
+        const agendaEditorWrap = el(`<div></div>`);
+        agendaCol.appendChild(agendaEditorWrap);
+        renderAgendaEditor(agendaEditorWrap, mtg.agendaItems);
         const agendaBtnRow = el(`<div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;"></div>`);
         const saveAgendaBtn = el(`<button class="btn ghost small">Save agenda</button>`);
-        saveAgendaBtn.onclick = ()=>{ mtg.agenda = agendaEdit.value; saveState(); showToast("Agenda saved"); };
+        saveAgendaBtn.onclick = ()=>{ saveState(); showToast("Agenda saved"); };
         const dlInviteBtn = el(`<button class="btn ghost small">Download invite (PDF)</button>`);
         dlInviteBtn.onclick = ()=>{ const doc = buildMeetingInvitePdf(mtg); if(doc) doc.save(`${mtg.title.replace(/\s+/g,'_')}_Invite.pdf`); };
         const sendInviteBtn = el(`<button class="btn">Send invite to members</button>`);
