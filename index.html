@@ -1915,13 +1915,13 @@ function buildMeetingInvitePdf(meeting){
   let y = 20;
   const textStartX = state.club.logo ? marginX + 24 : marginX;
 
-  if(state.club.logo){ try{ doc.addImage(state.club.logo, 'PNG', marginX, y-9, 18, 18); }catch(e){} }
-  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(20,42,70);
+  if(state.club.logo){ try{ doc.addImage(state.club.logo, 'PNG', marginX, y-7, 14, 14); }catch(e){} }
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(20,42,70);
   doc.text(state.club.name, textStartX, y);
-  doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,100,115);
-  doc.text('Meeting Invitation', textStartX, y+6);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(90,100,115);
+  doc.text('Meeting Invitation', textStartX, y+5);
   doc.setTextColor(20,20,20);
-  y += 18;
+  y += 12;
 
   // --- Blue banner: "AGENDA FOR ... TO BE HELD ON ..." / "TIME AT LOCATION" ---
   let dateLine = '';
@@ -1937,60 +1937,60 @@ function buildMeetingInvitePdf(meeting){
   const bannerLine1 = `AGENDA FOR ${(meeting.title||'MEETING').toUpperCase()}${dateLine?` TO BE HELD ON ${dateLine}`:''}`;
   const bannerLine2 = [timeLine, meeting.location?meeting.location.toUpperCase():''].filter(Boolean).join(' AT ');
 
-  doc.setFont('helvetica','bold'); doc.setFontSize(11);
+  doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
   const line1Wrapped = doc.splitTextToSize(bannerLine1, tableWidth-10);
   const line2Wrapped = bannerLine2 ? doc.splitTextToSize(bannerLine2, tableWidth-10) : [];
-  const bannerH = (line1Wrapped.length + line2Wrapped.length) * 6 + 6;
+  const bannerH = (line1Wrapped.length + line2Wrapped.length) * 5 + 4;
   doc.setFillColor(24,105,170);
   doc.rect(marginX, y, tableWidth, bannerH, 'F');
   doc.setTextColor(255,255,255);
-  let by = y + 8;
-  [...line1Wrapped, ...line2Wrapped].forEach(l=>{ doc.text(l, marginX+tableWidth/2, by, {align:'center'}); by += 6; });
+  let by = y + 6;
+  [...line1Wrapped, ...line2Wrapped].forEach(l=>{ doc.text(l, marginX+tableWidth/2, by, {align:'center'}); by += 5; });
   doc.setTextColor(20,20,20);
-  y += bannerH;
+  y += bannerH + 2;
 
   // --- One box per agenda section, each with a bold heading ---
-  const textX = marginX + 6;
-  const textWidth = tableWidth - 10;
+  const textX = marginX + 5;
+  const textWidth = tableWidth - 8;
 
   const items = (meeting.agendaItems || []).filter(s => (s.title||'').trim() || (s.content||'').trim());
 
   if(items.length===0){
-    const h = 14;
-    if(y + h > 283){ doc.addPage(); y = 20; }
+    const h = 11;
+    if(y + h > 288){ doc.addPage(); y = 20; }
     doc.setDrawColor(210,210,210); doc.setLineWidth(0.3);
     doc.rect(marginX, y, tableWidth, h);
-    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(120);
-    doc.text('No agenda sections added.', textX, y+9);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120);
+    doc.text('No agenda sections added.', textX, y+7);
     doc.setTextColor(20,20,20);
     y += h;
   } else {
     items.forEach((item, idx)=>{
-      doc.setFont('helvetica','bold'); doc.setFontSize(11);
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
       const headingLines = doc.splitTextToSize(`${idx+1}. ${item.title||'Untitled section'}`, textWidth);
       let detailLines = [];
       if(item.content && item.content.trim()){
-        doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+        doc.setFont('helvetica','normal'); doc.setFontSize(8);
         detailLines = doc.splitTextToSize(item.content.trim(), textWidth);
       }
-      const boxHeight = 6 + headingLines.length*6 + (detailLines.length ? detailLines.length*4.6 + 2 : 0) + 4;
+      const boxHeight = 3.5 + headingLines.length*4.6 + (detailLines.length ? detailLines.length*3.6 + 1.5 : 0) + 2;
 
-      if(y + boxHeight > 283){ doc.addPage(); y = 20; }
+      if(y + boxHeight > 288){ doc.addPage(); y = 20; }
 
-      doc.setDrawColor(210,210,210); doc.setLineWidth(0.3);
+      doc.setDrawColor(210,210,210); doc.setLineWidth(0.25);
       doc.rect(marginX, y, tableWidth, boxHeight);
       doc.setFillColor(200,154,62);
-      doc.rect(marginX, y, 1.4, boxHeight, 'F');
+      doc.rect(marginX, y, 1.2, boxHeight, 'F');
 
-      let ty = y + 7.5;
-      doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(24,60,110);
-      headingLines.forEach(l=>{ doc.text(l, textX, ty); ty += 6; });
+      let ty = y + 5.2;
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(24,60,110);
+      headingLines.forEach(l=>{ doc.text(l, textX, ty); ty += 4.6; });
       if(detailLines.length){
-        doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(80,80,80);
-        detailLines.forEach(l=>{ doc.text(l, textX, ty); ty += 4.6; });
+        doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(80,80,80);
+        detailLines.forEach(l=>{ doc.text(l, textX, ty); ty += 3.6; });
       }
       doc.setTextColor(20,20,20);
-      y += boxHeight + 4;
+      y += boxHeight + 1.8;
     });
   }
 
